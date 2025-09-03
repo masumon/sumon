@@ -1,199 +1,304 @@
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# ui/ui_report.py
+
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import threading
+from tkinter import messagebox, filedialog, simpledialog
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+import pandas as pd
+from fpdf import FPDF
+import os
+import sys
 
-from report.report import get_sales_report_by_date, get_monthly_profit_report
-from report.excel_export import export_sales_report_excel, export_profit_report_excel
-from report.pdf_export import export_sales_report_pdf, export_profit_report_pdf
+# project root যোগ করা যাতে Python module ঠিকমত খুঁজে পায়
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
+from report.report import get_sales_report, get_sales_report_by_date, get_due_report, get_customer_due_summary
+from due_payment_module.due_payment import sync_due_from_sales_and_service
+from product.product import update_product, delete_product
+from db import update_due, delete_due  # corrected import
 
-class ReportUI(tk.Frame):
-    def __init__(self, master=None):
-        super().__init__(master)
-        self.pack(fill="both", expand=True)
+class ReportUI:
+    def __init__(self, parent):
+        self.parent = parent
+        self.frame = ttk.Frame(parent, padding=10)
+        self.frame.pack(fill="both", expand=True)
+
+        # ===== স্টাইল =====
+        self.style = ttk.Style()
+        self.style.configure(
+            "Header.TLabel",
+            font=("Kalpurush", 22, "bold"),
+            foreground="#1a237e",
+            background="#f3f6fa",
+        )
+
+        # ===== উপরের বড় শিরোনাম =====
+        header_label = ttk.Label(self.frame, text="রিপোর্ট ব্যবস্থাপনা", style="Header.TLabel")
+        header_label.pack(pady=(10, 20))
+
         self.create_widgets()
+        # auto sync dues from sales and service
+        try:
+            sync_due_from_sales_and_service()
+        except Exception as e:
+            print("Auto-sync error:", e)
 
     def create_widgets(self):
-        self.tabControl = ttk.Notebook(self)
-        self.sales_tab = ttk.Frame(self.tabControl)
-        self.profit_tab = ttk.Frame(self.tabControl)
+        tab_control = ttk.Notebook(self.frame)
+        tab_control.pack(fill="both", expand=True)
 
-        self.tabControl.add(self.sales_tab, text='📅 বিক্রয় রিপোর্ট')
-        self.tabControl.add(self.profit_tab, text='📊 লাভ রিপোর্ট')
-        self.tabControl.pack(expand=1, fill="both")
-
+        # ---------- Sales Report Tab ----------
+        self.sales_frame = ttk.Frame(tab_control)
+        tab_control.add(self.sales_frame, text="বিক্রয় রিপোর্ট")
         self.create_sales_tab()
-        self.create_profit_tab()
 
-    # ------------------ Sales Tab ------------------
+        # ---------- Due Report Tab ----------
+        self.due_frame = ttk.Frame(tab_control)
+        tab_control.add(self.due_frame, text="বাকি রিপোর্ট")
+        self.create_due_tab()
+
+    # ---------------- Sales Tab ----------------
     def create_sales_tab(self):
-        frame = ttk.Frame(self.sales_tab)
-        frame.pack(pady=10, fill="x")
+        btn_frame = ttk.Frame(self.sales_frame)
+        btn_frame.pack(fill="x", pady=5)
 
-        ttk.Label(frame, text="শুরুর তারিখ (YYYY-MM-DD):").grid(row=0, column=0, padx=5, pady=5)
-        self.start_date_entry = ttk.Entry(frame)
-        self.start_date_entry.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(btn_frame, text="Refresh", bootstyle="info", command=self.load_sales).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Export PDF", bootstyle="primary", command=self.export_sales_pdf).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Export Excel", bootstyle="success", command=self.export_sales_excel).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Update Sale", bootstyle="warning", command=self.update_sale).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Delete Sale", bootstyle="danger", command=self.delete_sale).pack(side="left", padx=5)
 
-        ttk.Label(frame, text="শেষ তারিখ (YYYY-MM-DD):").grid(row=0, column=2, padx=5, pady=5)
-        self.end_date_entry = ttk.Entry(frame)
-        self.end_date_entry.grid(row=0, column=3, padx=5, pady=5)
+        columns = ("id", "product", "quantity", "sale_price", "total", "date")
+        self.sales_tree = ttk.Treeview(self.sales_frame, columns=columns, show="headings")
+        for col in columns:
+            self.sales_tree.heading(col, text=col.capitalize())
+            self.sales_tree.column(col, anchor="center", width=120)
+        self.sales_tree.pack(fill="both", expand=True)
 
-        ttk.Button(frame, text="রিপোর্ট দেখাও", command=self.load_sales_report).grid(row=0, column=4, padx=5, pady=5)
-        ttk.Button(frame, text="এক্সেল এক্সপোর্ট", command=lambda: self.ask_filename_and_run(self.export_sales_to_excel)).grid(row=0, column=5, padx=5, pady=5)
-        ttk.Button(frame, text="PDF এক্সপোর্ট", command=lambda: self.ask_filename_and_run(self.export_sales_to_pdf)).grid(row=0, column=6, padx=5, pady=5)
+        # Scrollbars
+        vbar = ttk.Scrollbar(self.sales_frame, orient=tk.VERTICAL, command=self.sales_tree.yview)
+        hbar = ttk.Scrollbar(self.sales_frame, orient=tk.HORIZONTAL, command=self.sales_tree.xview)
+        self.sales_tree.configure(yscroll=vbar.set, xscroll=hbar.set)
+        vbar.pack(side="right", fill="y")
+        hbar.pack(side="bottom", fill="x")
+        self.sales_tree.bind("<MouseWheel>", lambda event: self.sales_tree.yview_scroll(int(-1*(event.delta/120)), "units"))
 
-        self.sales_tree = ttk.Treeview(self.sales_tab, columns=("ID", "Product", "Qty", "Price", "Total", "Date"), show='headings')
-        for col in self.sales_tree["columns"]:
-            self.sales_tree.heading(col, text=col)
-            self.sales_tree.column(col, width=120, anchor="center")
-        self.sales_tree.pack(pady=10, fill="both", expand=True)
+        self.load_sales()
 
-        self.total_sales_label = ttk.Label(self.sales_tab, text="মোট বিক্রয়: 0.00 টাকা", font=("Helvetica", 12, "bold"))
-        self.total_sales_label.pack(pady=5)
+    def load_sales(self):
+        for row in self.sales_tree.get_children():
+            self.sales_tree.delete(row)
+        sales = get_sales_report()
+        for s in sales:
+            self.sales_tree.insert("", "end", values=(
+                s.get("id"), s.get("product"), s.get("quantity"),
+                s.get("sale_price"), s.get("total"), s.get("date")
+            ))
 
-    def load_sales_report(self):
-        start = self.start_date_entry.get().strip()
-        end = self.end_date_entry.get().strip()
-
-        if not start or not end:
-            messagebox.showwarning("⚠️ সতর্কতা", "তারিখ দিন")
+    def export_sales_pdf(self):
+        sales = get_sales_report()
+        if not sales:
+            messagebox.showwarning("ত্রুটি", "কোনো বিক্রয় ডেটা নেই।")
             return
+        file_path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF files","*.pdf")])
+        if not file_path:
+            return
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, "বিক্রয় রিপোর্ট", 0, 1, "C")
+        pdf.set_font("Arial", "B", 12)
+        cols = ["ID", "Product", "Quantity", "Sale Price", "Total", "Date"]
+        widths = [15, 50, 20, 25, 25, 35]
+        for i, col in enumerate(cols):
+            pdf.cell(widths[i], 8, col, 1, 0, "C")
+        pdf.ln()
+        pdf.set_font("Arial", "", 11)
+        for s in sales:
+            row = [str(s["id"]), s["product"], str(s["quantity"]), str(s["sale_price"]), str(s["total"]), str(s["date"])]
+            for i, val in enumerate(row):
+                pdf.cell(widths[i], 8, val, 1, 0, "C")
+            pdf.ln()
+        pdf.output(file_path)
+        messagebox.showinfo("সফল", f"PDF Exported: {os.path.basename(file_path)}")
 
-        try:
-            rows = get_sales_report_by_date(start, end)
-            self.sales_tree.delete(*self.sales_tree.get_children())
+    def export_sales_excel(self):
+        sales = get_sales_report()
+        if not sales:
+            messagebox.showwarning("ত্রুটি", "কোনো বিক্রয় ডেটা নেই।")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files","*.xlsx")])
+        if not file_path:
+            return
+        df = pd.DataFrame(sales)
+        df.to_excel(file_path, index=False)
+        messagebox.showinfo("সফল", f"Excel Exported: {os.path.basename(file_path)}")
 
-            total_sales = 0.0
-            for r in rows:
-                self.sales_tree.insert('', 'end', values=(
-                    r['sale_id'], r['product_name'], r['quantity'], r['unit_price'], r['total_price'], r['sale_date']
-                ))
-                total_sales += r['total_price']
+    def update_sale(self):
+        selected = self.sales_tree.selection()
+        if not selected:
+            messagebox.showwarning("ত্রুটি", "আপডেট করার জন্য একটি sale নির্বাচন করুন।")
+            return
+        sale_id = self.sales_tree.item(selected[0])['values'][0]
+        new_qty = simpledialog.askinteger("Update Sale", "নতুন quantity দিন:", minvalue=1)
+        if new_qty is not None:
+            from db import update_sale  # import CRUD function
+            update_sale(sale_id, quantity=new_qty)
+            sync_due_from_sales_and_service()
+            self.load_sales()
+            self.load_due()
+            messagebox.showinfo("সফল", f"Sale ID {sale_id} আপডেট হয়েছে।")
 
-            self.total_sales_label.config(text=f"মোট বিক্রয়: {total_sales:.2f} টাকা")
+    def delete_sale(self):
+        selected = self.sales_tree.selection()
+        if not selected:
+            messagebox.showwarning("ত্রুটি", "ডিলিট করার জন্য একটি sale নির্বাচন করুন।")
+            return
+        sale_id = self.sales_tree.item(selected[0])['values'][0]
+        if messagebox.askyesno("Confirm Delete", f"Sale ID {sale_id} ডিলিট করতে চান?"):
+            from db import delete_sale  # import CRUD function
+            delete_sale(sale_id)
+            sync_due_from_sales_and_service()
+            self.load_sales()
+            self.load_due()
+            messagebox.showinfo("সফল", f"Sale ID {sale_id} ডিলিট হয়েছে।")
 
-        except Exception as e:
-            messagebox.showerror("❌ ত্রুটি", f"রিপোর্ট লোড করতে সমস্যা হয়েছে:\n{e}")
+    # ---------------- Due Tab ----------------
+    def create_due_tab(self):
+        btn_frame = ttk.Frame(self.due_frame)
+        btn_frame.pack(fill="x", pady=5)
 
-    def ask_filename_and_run(self, export_func):
-        """UI থেকে ফাইল নাম নিয়ে ব্যাকগ্রাউন্ড থ্রেডে প্রসেস চালানো হবে"""
-        if "excel" in export_func.__name__:
-            filetypes = [("Excel Files", "*.xlsx")]
-            defext = ".xlsx"
-        else:
-            filetypes = [("PDF Files", "*.pdf")]
-            defext = ".pdf"
+        ttk.Button(btn_frame, text="Refresh", bootstyle="info", command=self.load_due).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Export PDF", bootstyle="primary", command=self.export_due_pdf).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Export Excel", bootstyle="success", command=self.export_due_excel).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Update Due", bootstyle="warning", command=self.update_due_ui).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Delete Due", bootstyle="danger", command=self.delete_due_ui).pack(side="left", padx=5)
 
-        filename = filedialog.asksaveasfilename(defaultextension=defext, filetypes=filetypes)
-        if filename:
-            threading.Thread(target=export_func, args=(filename,), daemon=True).start()
+        columns = ("id", "customer", "amount", "due_date", "sale_id", "date")
+        self.due_tree = ttk.Treeview(self.due_frame, columns=columns, show="headings")
+        for col in columns:
+            self.due_tree.heading(col, text=col.capitalize())
+            self.due_tree.column(col, anchor="center", width=120)
+        self.due_tree.pack(fill="both", expand=True)
 
-    def export_sales_to_excel(self, filename):
-        start = self.start_date_entry.get().strip()
-        end = self.end_date_entry.get().strip()
-        try:
-            rows = get_sales_report_by_date(start, end)
-            if not rows:
-                self.show_message("ℹ️ তথ্য", "কোনো ডেটা পাওয়া যায়নি।", "info")
-                return
-            export_sales_report_excel(rows, start, end, filename)
-            self.show_message("✅ সফল", "বিক্রয় রিপোর্ট Excel এ এক্সপোর্ট হয়েছে।", "info")
-        except Exception as e:
-            self.show_message("❌ ত্রুটি", f"এক্সপোর্ট করতে সমস্যা হয়েছে:\n{e}", "error")
+        # Scrollbars
+        vbar = ttk.Scrollbar(self.due_frame, orient=tk.VERTICAL, command=self.due_tree.yview)
+        hbar = ttk.Scrollbar(self.due_frame, orient=tk.HORIZONTAL, command=self.due_tree.xview)
+        self.due_tree.configure(yscroll=vbar.set, xscroll=hbar.set)
+        vbar.pack(side="right", fill="y")
+        hbar.pack(side="bottom", fill="x")
+        self.due_tree.bind("<MouseWheel>", lambda event: self.due_tree.yview_scroll(int(-1*(event.delta/120)), "units"))
 
-    def export_sales_to_pdf(self, filename):
-        start = self.start_date_entry.get().strip()
-        end = self.end_date_entry.get().strip()
-        try:
-            rows = get_sales_report_by_date(start, end)
-            if not rows:
-                self.show_message("ℹ️ তথ্য", "কোনো ডেটা পাওয়া যায়নি।", "info")
-                return
-            export_sales_report_pdf(rows, start, end, filename)
-            self.show_message("✅ সফল", "PDF রিপোর্ট সফলভাবে সংরক্ষণ হয়েছে।", "info")
-        except Exception as e:
-            self.show_message("❌ ত্রুটি", f"PDF তৈরি করতে সমস্যা হয়েছে:\n{e}", "error")
+        self.load_due()
 
-    # ------------------ Profit Tab ------------------
-    def create_profit_tab(self):
-        frame = ttk.Frame(self.profit_tab)
-        frame.pack(pady=10, fill="x")
+    def load_due(self):
+        for row in self.due_tree.get_children():
+            self.due_tree.delete(row)
+        dues = get_due_report()
+        # ---------- duplicate safe ----------
+        seen = set()
+        filtered_dues = []
+        for d in dues:
+            key = (d.get("customer") or "Unknown", d.get("sale_id"), d.get("due_date"))
+            if key in seen:
+                continue
+            seen.add(key)
+            filtered_dues.append(d)
+        # ---------- insert into tree ----------
+        for d in filtered_dues:
+            self.due_tree.insert("", "end", values=(
+                d.get("id"), d.get("customer"), d.get("amount"),
+                d.get("due_date"), d.get("sale_id"), d.get("date")
+            ))
 
-        ttk.Label(frame, text="মাস (১-১২):").grid(row=0, column=0, padx=5, pady=5)
-        self.month_entry = ttk.Entry(frame)
-        self.month_entry.grid(row=0, column=1, padx=5, pady=5)
+    def export_due_pdf(self):
+        dues = get_due_report()
+        # duplicate safe
+        seen = set()
+        filtered_dues = []
+        for d in dues:
+            key = (d.get("customer") or "Unknown", d.get("sale_id"), d.get("due_date"))
+            if key in seen:
+                continue
+            seen.add(key)
+            filtered_dues.append(d)
+        if not filtered_dues:
+            messagebox.showwarning("ত্রুটি", "কোনো বাকি ডেটা নেই।")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF files","*.pdf")])
+        if not file_path:
+            return
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, "বাকি রিপোর্ট", 0, 1, "C")
+        pdf.set_font("Arial", "B", 12)
+        cols = ["ID", "Customer", "Amount", "Due Date", "Sale ID", "Date"]
+        widths = [15, 50, 25, 30, 20, 35]
+        for i, col in enumerate(cols):
+            pdf.cell(widths[i], 8, col, 1, 0, "C")
+        pdf.ln()
+        pdf.set_font("Arial", "", 11)
+        for d in filtered_dues:
+            row = [str(d["id"]), str(d.get("customer") or "Unknown"), str(d["amount"]),
+                   str(d["due_date"]), str(d["sale_id"]), str(d["date"])]
+            for i, val in enumerate(row):
+                pdf.cell(widths[i], 8, val, 1, 0, "C")
+            pdf.ln()
+        pdf.output(file_path)
+        messagebox.showinfo("সফল", f"PDF Exported: {os.path.basename(file_path)}")
 
-        ttk.Label(frame, text="বছর (YYYY):").grid(row=0, column=2, padx=5, pady=5)
-        self.year_entry = ttk.Entry(frame)
-        self.year_entry.grid(row=0, column=3, padx=5, pady=5)
+    def export_due_excel(self):
+        dues = get_due_report()
+        # duplicate safe
+        seen = set()
+        filtered_dues = []
+        for d in dues:
+            key = (d.get("customer") or "Unknown", d.get("sale_id"), d.get("due_date"))
+            if key in seen:
+                continue
+            seen.add(key)
+            filtered_dues.append(d)
+        if not filtered_dues:
+            messagebox.showwarning("ত্রুটি", "কোনো বাকি ডেটা নেই।")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files","*.xlsx")])
+        if not file_path:
+            return
+        df = pd.DataFrame(filtered_dues)
+        df.to_excel(file_path, index=False)
+        messagebox.showinfo("সফল", f"Excel Exported: {os.path.basename(file_path)}")
 
-        ttk.Button(frame, text="রিপোর্ট দেখাও", command=self.load_profit_report).grid(row=0, column=4, padx=5, pady=5)
-        ttk.Button(frame, text="এক্সেল এক্সপোর্ট", command=lambda: self.ask_filename_and_run(self.export_profit_to_excel)).grid(row=0, column=5, padx=5, pady=5)
-        ttk.Button(frame, text="PDF এক্সপোর্ট", command=lambda: self.ask_filename_and_run(self.export_profit_to_pdf)).grid(row=0, column=6, padx=5, pady=5)
+    # ---------------- Due Update/Delete ----------------
+    def update_due_ui(self):
+        selected = self.due_tree.selection()
+        if not selected:
+            messagebox.showwarning("ত্রুটি", "আপডেট করার জন্য একটি due নির্বাচন করুন।")
+            return
+        due_id = self.due_tree.item(selected[0])['values'][0]
+        new_amount = simpledialog.askfloat("Update Due", "নতুন amount দিন:", minvalue=0)
+        if new_amount is not None:
+            try:
+                update_due(due_id, amount=new_amount)
+                sync_due_from_sales_and_service()
+                self.load_due()
+                messagebox.showinfo("সফল", f"Due ID {due_id} আপডেট হয়েছে।")
+            except Exception as e:
+                messagebox.showerror("Error", f"Update failed: {e}")
 
-        self.profit_tree = ttk.Treeview(self.profit_tab, columns=("Product", "Qty", "ক্রয়মূল্য", "বিক্রয়মূল্য", "মোট", "লাভ", "Date"), show='headings')
-        for col in self.profit_tree["columns"]:
-            self.profit_tree.heading(col, text=col)
-            self.profit_tree.column(col, width=120, anchor="center")
-        self.profit_tree.pack(pady=10, fill="both", expand=True)
-
-        self.total_profit_label = ttk.Label(self.profit_tab, text="মোট লাভ: 0.00 টাকা", font=("Helvetica", 12, "bold"))
-        self.total_profit_label.pack(pady=5)
-
-    def load_profit_report(self):
-        month = self.month_entry.get().strip()
-        year = self.year_entry.get().strip()
-        try:
-            data = get_monthly_profit_report(month, year)
-            self.profit_tree.delete(*self.profit_tree.get_children())
-            total_profit = data.get('total_profit', 0)
-            for r in data['details']:
-                self.profit_tree.insert('', 'end', values=(
-                    r['product_name'], r['quantity'], r['purchase_price'], r['sale_price'],
-                    r['total_sell'], r['profit'], r['sale_date']
-                ))
-            self.total_profit_label.config(text=f"মোট লাভ: {total_profit:.2f} টাকা")
-        except Exception as e:
-            messagebox.showerror("❌ ত্রুটি", f"রিপোর্ট লোড করতে সমস্যা হয়েছে:\n{e}")
-
-    def export_profit_to_excel(self, filename):
-        month = self.month_entry.get().strip()
-        year = self.year_entry.get().strip()
-        try:
-            data = get_monthly_profit_report(month, year)
-            if not data['details']:
-                self.show_message("ℹ️ তথ্য", "কোনো ডেটা পাওয়া যায়নি।", "info")
-                return
-            export_profit_report_excel(data, month, year, filename)
-            self.show_message("✅ সফল", "লাভ রিপোর্ট Excel এ এক্সপোর্ট হয়েছে।", "info")
-        except Exception as e:
-            self.show_message("❌ ত্রুটি", f"এক্সপোর্ট করতে সমস্যা হয়েছে:\n{e}", "error")
-
-    def export_profit_to_pdf(self, filename):
-        month = self.month_entry.get().strip()
-        year = self.year_entry.get().strip()
-        try:
-            data = get_monthly_profit_report(month, year)
-            if not data['details']:
-                self.show_message("ℹ️ তথ্য", "কোনো ডেটা পাওয়া যায়নি।", "info")
-                return
-            export_profit_report_pdf(data, month, year, filename)
-            self.show_message("✅ সফল", "PDF রিপোর্ট সফলভাবে সংরক্ষণ হয়েছে।", "info")
-        except Exception as e:
-            self.show_message("❌ ত্রুটি", f"PDF তৈরি করতে সমস্যা হয়েছে:\n{e}", "error")
-
-    # ------------------ Helper ------------------
-    def show_message(self, title, message, mtype="info"):
-        """Main thread থেকে messagebox দেখাবে"""
-        self.after(0, lambda: getattr(messagebox, mtype)(title, message))
-
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("রিপোর্ট - SmartShop POS")
-    root.geometry("950x600")
-    app = ReportUI(root)
-    root.mainloop()
+    def delete_due_ui(self):
+        selected = self.due_tree.selection()
+        if not selected:
+            messagebox.showwarning("ত্রুটি", "ডিলিট করার জন্য একটি due নির্বাচন করুন।")
+            return
+        due_id = self.due_tree.item(selected[0])['values'][0]
+        if messagebox.askyesno("Confirm Delete", f"Due ID {due_id} ডিলিট করতে চান?"):
+            try:
+                delete_due(due_id)
+                sync_due_from_sales_and_service()
+                self.load_due()
+                messagebox.showinfo("সফল", f"Due ID {due_id} ডিলিট হয়েছে।")
+            except Exception as e:
+                messagebox.showerror("Error", f"Delete failed: {e}")

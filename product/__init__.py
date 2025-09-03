@@ -1,18 +1,18 @@
+"""
+Product Module
+প্রোডাক্ট, স্টক এবং সেল ম্যানেজমেন্ট
+"""
+
 from .product import (
-    add_product,
-    get_all_products,
-    get_product_by_id,
-    update_product,
-    delete_product
+    add_product, get_product_by_id, get_product_by_name_or_code,
+    update_product, delete_product, get_all_products,
+    get_product_stock, update_stock, update_stock_by_name,
+    get_product_sale_price, get_product_purchase_price
 )
 
-from .stock import (
-    add_stock,
-    get_stock_by_product,  # ← এখানে ঠিক করা হয়েছে
-    reduce_stock
-)
-
-from .sale import (
-    record_sale,
-    get_sales_by_product
-)
+__all__ = [
+    'add_product', 'get_product_by_id', 'get_product_by_name_or_code',
+    'update_product', 'delete_product', 'get_all_products',
+    'get_product_stock', 'update_stock', 'update_stock_by_name',
+    'get_product_sale_price', 'get_product_purchase_price'
+]

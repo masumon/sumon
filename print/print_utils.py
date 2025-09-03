@@ -1,7 +1,5 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import os
 import platform
 import tempfile
 import subprocess
@@ -9,11 +7,16 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from barcode_generator.barcode import generate_barcode_image
 
+# ---------------- Printer Utilities ----------------
 def get_default_printer():
     system_platform = platform.system()
     if system_platform == "Windows":
-        import win32print
-        return win32print.GetDefaultPrinter()
+        try:
+            import win32print
+            return win32print.GetDefaultPrinter()
+        except ImportError:
+            print("Warning: win32print not installed. Install with: pip install pywin32")
+            return None
     elif system_platform == "Linux":
         try:
             output = subprocess.check_output(['lpstat', '-d']).decode()
@@ -26,8 +29,11 @@ def get_default_printer():
 def set_default_printer(printer_name):
     system_platform = platform.system()
     if system_platform == "Windows":
-        import win32print
-        win32print.SetDefaultPrinter(printer_name)
+        try:
+            import win32print
+            win32print.SetDefaultPrinter(printer_name)
+        except ImportError:
+            print("Warning: win32print not installed. Install with: pip install pywin32")
     elif system_platform == "Linux":
         subprocess.run(["lpoptions", "-d", printer_name])
     else:
@@ -37,9 +43,12 @@ def list_printers():
     system_platform = platform.system()
     printers = []
     if system_platform == "Windows":
-        import win32print
-        printers_info = win32print.EnumPrinters(2)
-        printers = [info[2] for info in printers_info]
+        try:
+            import win32print
+            printers_info = win32print.EnumPrinters(2)
+            printers = [info[2] for info in printers_info]
+        except ImportError:
+            print("Warning: win32print not installed. Install with: pip install pywin32")
     elif system_platform == "Linux":
         try:
             output = subprocess.check_output(['lpstat', '-p']).decode()
@@ -53,8 +62,6 @@ def print_file(file_path, printer_name=None):
     if system_platform == "Windows":
         if printer_name is None:
             printer_name = get_default_printer()
-        # Windows CMD এর PRINT কমান্ড খুব সীমিত, তাই win32print ব্যবহার করাই ভালো,
-        # তবে এখানে সিম্পল os.system দিয়ে করা হয়েছে।
         cmd = f'PRINT /D:"{printer_name}" "{file_path}"'
         os.system(cmd)
     elif system_platform == "Linux":
@@ -66,15 +73,13 @@ def print_file(file_path, printer_name=None):
     else:
         raise NotImplementedError("Unsupported platform for printing")
 
+# ---------------- Barcode Utilities ----------------
 def create_barcode_pdf(barcode_path: str, output_pdf_path: str):
     c = canvas.Canvas(output_pdf_path, pagesize=letter)
     c.drawImage(barcode_path, 100, 600, width=300, height=100)
     c.save()
 
 def print_barcode_pdf(barcode_img_path: str, output_pdf_path: str = "barcode.pdf"):
-    """
-    প্রদত্ত বারকোড ইমেজ পিডিএফ বানায় এবং ফাইল রিটার্ন করে। প্রিন্ট করে না।
-    """
     create_barcode_pdf(barcode_img_path, output_pdf_path)
     return output_pdf_path
 
@@ -84,6 +89,7 @@ def print_barcode(data: str, output_pdf_path: str = "barcode.pdf", printer_name:
     create_barcode_pdf(barcode_img_path, output_pdf_path)
     print_file(output_pdf_path, printer_name)
 
+# ---------------- Receipt Utilities ----------------
 def create_receipt_pdf(receipt_data: dict, output_pdf_path: str = "receipt.pdf"):
     c = canvas.Canvas(output_pdf_path, pagesize=letter)
     c.setFont("Helvetica-Bold", 16)
@@ -107,9 +113,6 @@ def print_receipt(receipt_data: dict, printer_name: str = None):
     print_file(temp_pdf, printer_name)
 
 def print_receipt_pdf(product, quantity, unit_price, total_price, sale_date, output_pdf_path: str = "receipt.pdf"):
-    """
-    বিক্রয়ের রসিদ PDF তৈরি করে path রিটার্ন করে। (প্রিন্ট করে না)
-    """
     receipt_data = {
         "store_name": "SmartShop",
         "date": sale_date,

@@ -1,46 +1,44 @@
-import sys
+# ui/ui_barcode.py
+
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import tkinter as tk
-from tkinter import messagebox
-from barcode_generator.barcode import generate_barcode
+from tkinter import messagebox, filedialog
 import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+import barcode
+from barcode.writer import ImageWriter
+
+BARCODE_DIR = os.path.join(os.path.dirname(__file__), "..", "barcode_images")
+os.makedirs(BARCODE_DIR, exist_ok=True)
 
 class BarcodeUI(ttk.Frame):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.build_ui()
+    """Barcode Generator UI"""
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.frame = self  # Add frame attribute for compatibility
         self.pack(fill="both", expand=True)
+        self.create_widgets()
 
-    def build_ui(self):
-        ttk.Label(self, text="বারকোডের ডেটা:", font=("Helvetica", 12)).pack(pady=(20, 5))
-        self.entry_data = ttk.Entry(self, font=("Helvetica", 12), width=30)
-        self.entry_data.pack(pady=5)
+    def create_widgets(self):
+        frame = ttk.LabelFrame(self, text="Generate Barcode", padding=20)
+        frame.pack(padx=10, pady=10, fill="x")
 
-        ttk.Label(self, text="ফাইল নাম (বিকল্প):", font=("Helvetica", 12)).pack(pady=(15, 5))
-        self.entry_filename = ttk.Entry(self, font=("Helvetica", 12), width=30)
-        self.entry_filename.pack(pady=5)
+        ttk.Label(frame, text="Enter Code:").grid(row=0, column=0, padx=5, pady=5)
+        self.code_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.code_var, width=30).grid(row=0, column=1, padx=5, pady=5)
 
-        ttk.Button(
-            self,
-            text="বারকোড তৈরি করুন",
-            bootstyle="success",
-            command=self.create_barcode
-        ).pack(pady=20)
+        ttk.Button(frame, text="Generate", bootstyle="success", command=self.generate_barcode).grid(row=1, column=0, columnspan=2, pady=10)
 
-    def create_barcode(self):
-        data = self.entry_data.get().strip()
-        filename = self.entry_filename.get().strip()
-
-        if not data:
-            messagebox.showerror("ত্রুটি", "বারকোডের ডেটা লিখুন।")
+    def generate_barcode(self):
+        code = self.code_var.get().strip()
+        if not code:
+            messagebox.showwarning("Warning", "Please enter a code")
             return
-
-        if not filename:
-            filename = "barcode"  # ডিফল্ট নাম
-
         try:
-            path = generate_barcode(data, filename)
-            messagebox.showinfo("সফল", f"বারকোড সেভ হয়েছে:\n{path}")
+            file_path = os.path.join(BARCODE_DIR, f"{code}.png")
+            EAN = barcode.get_barcode_class('code128')
+            ean = EAN(code, writer=ImageWriter())
+            ean.save(file_path)
+            messagebox.showinfo("Success", f"Barcode saved: {file_path}")
         except Exception as e:
-            messagebox.showerror("ব্যর্থ", f"বারকোড তৈরি করা যায়নি:\n{e}")
+            messagebox.showerror("Error", str(e))

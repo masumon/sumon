@@ -1,46 +1,56 @@
-from db import get_connection
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# auth/user.py (Final Version - Fixed Imports)
 import hashlib
+from db import get_connection, db_retry  # <-- Absolute import
 
 def hash_password(password: str) -> str:
-    """পাসওয়ার্ড হ্যাশ করার জন্য (সাধারণ SHA256 হ্যাশ)"""
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    """SHA-256 দিয়ে পাসওয়ার্ড হ্যাশ করা"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
-def register_user(username, password, role="user"):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        hashed_password = hash_password(password)
-        cursor.execute('''
-            INSERT INTO users (username, password, role)
-            VALUES (?, ?, ?)
-        ''', (username, hashed_password, role))
-        conn.commit()
-        return True
-    except Exception as e:
-        print(f"[register_user] Error: {e}")
-        return False
-    finally:
-        conn.close()
-
-def get_user_by_username(username):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-    return cursor.fetchone()
-
-def initialize_auth_tables():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL,
-            role TEXT DEFAULT 'user'
+@db_retry
+def authenticate_user(username: str, password: str):
+    """লগইন যাচাই"""
+    hashed = hash_password(password)
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, username, role FROM users WHERE username=? AND password=?",
+            (username, hashed)
         )
-    ''')
-    conn.commit()
-    conn.close()
+        row = cursor.fetchone()
+    if row:
+        return {"id": row["id"], "username": row["username"], "role": row["role"]}
+    return None
+
+@db_retry
+def create_user(username: str, password: str, role="user"):
+    """নতুন ইউজার তৈরি"""
+    hashed = hash_password(password)
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, datetime('now','localtime'))",
+            (username, hashed, role)
+        )
+        conn.commit()
+
+@db_retry
+def reset_password(username: str, new_password: str):
+    """পাসওয়ার্ড রিসেট"""
+    hashed = hash_password(new_password)
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET password=? WHERE username=?",
+            (hashed, username)
+        )
+        conn.commit()
+
+@db_retry
+def get_all_users():
+    """সব ইউজার তালিকা"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, username, role, created_at FROM users ORDER BY id"
+        )
+        return cursor.fetchall()

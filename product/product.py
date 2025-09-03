@@ -1,172 +1,183 @@
 import sys
 import os
+import sqlite3
+from db import get_connection
+from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from db import get_connection
-
-def initialize_product_tables():
+# ---------------------------
+# Product Management
+# ---------------------------
+def add_product(name, sale_price, stock=0, purchase_price=0, code="", source="", source_desc=""):
     """
-    পণ্যের টেবিল তৈরি করবে যদি না থাকে:
-    - products: পণ্যের ডিটেইলস (barcode সহ)
-    - sales: বিক্রয় সংক্রান্ত তথ্য
+    Product add করে। source এবং source_desc নতুন optional fields হিসেবে যুক্ত করা হলো।
     """
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            purchase_price REAL NOT NULL,
-            sale_price REAL NOT NULL,
-            stock INTEGER NOT NULL DEFAULT 0,
-            category TEXT,
-            barcode TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sales (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER NOT NULL,
-            quantity INTEGER NOT NULL,
-            sale_price REAL NOT NULL,
-            total REAL NOT NULL,
-            sale_date TEXT NOT NULL,
-            FOREIGN KEY(product_id) REFERENCES products(id)
-        )
-    ''')
+    if code:
+        cursor.execute("SELECT id FROM products WHERE code=?", (code,))
+        if cursor.fetchone():
+            conn.close()
+            return False, "Code already exists!"
+    cursor.execute("""
+        INSERT INTO products (name, sale_price, purchase_price, stock, code, source, source_desc)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (name, sale_price, purchase_price, stock, code, source, source_desc))
     conn.commit()
     conn.close()
+    return True, "Product added successfully."
 
-def add_product(name, purchase_price, sale_price, stock=0, category=None, barcode=None):
-    """
-    নতুন পণ্য যোগ করবে (barcode সহ)
-    """
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute('''
-            INSERT INTO products (name, purchase_price, sale_price, stock, category, barcode)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (name, purchase_price, sale_price, stock, category, barcode))
-        conn.commit()
-        return True
-    except Exception as e:
-        print("পণ্য যোগে ত্রুটি:", e)
-        return False
-    finally:
-        conn.close()
-
-def get_all_products():
-    """
-    সব পণ্যের তালিকা ফেরত দিবে (barcode সহ)
-    """
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name, purchase_price, sale_price, stock, category, barcode FROM products')
-    products = cursor.fetchall()
-    conn.close()
-    return products
 
 def get_product_by_id(product_id):
-    """
-    আইডি অনুযায়ী একটি পণ্যের তথ্য ফিরিয়ে দিবে (barcode সহ)
-    """
     conn = get_connection()
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, purchase_price, sale_price, stock, category, barcode FROM products WHERE id=?', (product_id,))
-    product = cursor.fetchone()
+    cursor.execute("SELECT * FROM products WHERE id=?", (product_id,))
+    row = cursor.fetchone()
     conn.close()
-    return product
+    return dict(row) if row else None
 
-def update_product(product_id, name=None, purchase_price=None, sale_price=None, stock=None, category=None, barcode=None):
-    """
-    একটি পণ্য আপডেট করবে, প্রয়োজনীয় ক্ষেত্রগুলো (barcode সহ)
-    """
+
+def get_product_by_name_or_code(search_value):
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM products
+        WHERE name LIKE ? OR code = ?
+        ORDER BY name
+    """, (f"%{search_value}%", search_value))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_product(product_id, **kwargs):
+    if not kwargs:
+        return False, "No fields to update."
     conn = get_connection()
     cursor = conn.cursor()
+    if "code" in kwargs and kwargs["code"]:
+        cursor.execute("SELECT id FROM products WHERE code=? AND id<>?", (kwargs["code"], product_id))
+        if cursor.fetchone():
+            conn.close()
+            return False, "Code already exists!"
+    fields = ", ".join([f"{k}=?" for k in kwargs])
+    values = list(kwargs.values()) + [product_id]
+    cursor.execute(f"UPDATE products SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?", values)
+    conn.commit()
+    conn.close()
+    return True, "Product updated successfully."
 
-    fields = []
-    values = []
-
-    if name is not None:
-        fields.append('name=?')
-        values.append(name)
-    if purchase_price is not None:
-        fields.append('purchase_price=?')
-        values.append(purchase_price)
-    if sale_price is not None:
-        fields.append('sale_price=?')
-        values.append(sale_price)
-    if stock is not None:
-        fields.append('stock=?')
-        values.append(stock)
-    if category is not None:
-        fields.append('category=?')
-        values.append(category)
-    if barcode is not None:
-        fields.append('barcode=?')
-        values.append(barcode)
-
-    values.append(product_id)
-
-    try:
-        query = f"UPDATE products SET {', '.join(fields)} WHERE id=?"
-        cursor.execute(query, tuple(values))
-        conn.commit()
-        return cursor.rowcount > 0
-    except Exception as e:
-        print("পণ্য আপডেট করতে সমস্যা:", e)
-        return False
-    finally:
-        conn.close()
 
 def delete_product(product_id):
-    """
-    একটি পণ্য মুছে ফেলবে
-    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM products WHERE id=?", (product_id,))
+    conn.commit()
+    conn.close()
+    return True, "Product deleted successfully."
+
+
+def get_all_products():
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM products ORDER BY id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------
+# Stock Management
+# ---------------------------
+def get_product_stock(product_id):
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, name, stock, sale_price, purchase_price FROM products WHERE id=?', (product_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_stock(product_id, quantity_change, note=None, entry_type=None):
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute('DELETE FROM products WHERE id=?', (product_id,))
+        cursor.execute("SELECT stock FROM products WHERE id=?", (product_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        current_stock = row[0]
+        new_stock = current_stock + quantity_change
+        if new_stock < 0:
+            return False
+
+        cursor.execute("UPDATE products SET stock=? WHERE id=?", (new_stock, product_id))
+        cursor.execute("""
+            INSERT INTO stock (product_id, quantity, entry_type, note)
+            VALUES (?, ?, ?, ?)
+        """, (product_id, quantity_change, entry_type, note))
         conn.commit()
-        return cursor.rowcount > 0
-    except Exception as e:
-        print("পণ্য মুছতে সমস্যা:", e)
-        return False
+        return True
     finally:
         conn.close()
 
-def get_product_list():
-    """
-    বিক্রয়ের জন্য Combobox বা Dropdown-এ দেখানোর জন্য শুধু id এবং name রিটার্ন করবে
-    """
+
+def update_stock_by_name(name, delta_qty, note=None, entry_type=None):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name FROM products')
-    products = cursor.fetchall()
+    try:
+        cursor.execute("SELECT id, stock FROM products WHERE name=?", (name,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        pid, current_stock = row
+        new_stock = current_stock + delta_qty
+        if new_stock < 0:
+            return False
+        cursor.execute("UPDATE products SET stock=? WHERE id=?", (new_stock, pid))
+        cursor.execute("""
+            INSERT INTO stock (product_id, quantity, entry_type, note)
+            VALUES (?, ?, ?, ?)
+        """, (pid, delta_qty, entry_type, note))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+# ---------------------------
+# Sale Price Fetch
+# ---------------------------
+def get_product_sale_price(product_id):
+    """product_id অনুযায়ী sale_price ফেরত দেয়"""
+    product = get_product_by_id(product_id)
+    if product:
+        return product.get("sale_price", 0)
+    return 0
+
+# ---------------------------
+# Purchase Price Fetch
+# ---------------------------
+def get_product_purchase_price(product_id):
+    """product_id অনুযায়ী purchase_price ফেরত দেয়"""
+    product = get_product_by_id(product_id)
+    if product:
+        return product.get("purchase_price", 0)
+    return 0
+
+# ---------------------------
+# Product Name Fetch (for report.py)
+# ---------------------------
+def get_product_name(product_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM products WHERE id=?", (product_id,))
+    row = cursor.fetchone()
     conn.close()
-    return products
-
-if __name__ == "__main__":
-    # টেস্টিং (পুনরায় চালানোর জন্য)
-    initialize_product_tables()
-
-    if add_product("টেস্ট পণ্য", 100, 150, 10, "ইলেক্ট্রনিক্স", "1234567890123"):
-        print("পণ্য সফলভাবে যোগ হয়েছে।")
-
-    products = get_all_products()
-    print("সব পণ্য:")
-    for p in products:
-        print(p)
-
-    product = get_product_by_id(1)
-    print("আইডি ১ এর পণ্য:", product)
-
-    if update_product(1, sale_price=200, barcode="9876543210987"):
-        print("পণ্য সফলভাবে আপডেট হয়েছে।")
-
-    if delete_product(1):
-        print("পণ্য সফলভাবে মুছে ফেলা হয়েছে।")
+    return row[0] if row else ""

@@ -1,0 +1,479 @@
+import sys
+import os
+import sqlite3
+from datetime import datetime, timedelta
+import threading
+import time
+import webbrowser
+import pandas as pd
+from fpdf import FPDF
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+from tkinter import messagebox, filedialog, simpledialog
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "smartshop.db")
+
+# ---------------- Database Helpers ----------------
+def execute_db(query, params=()):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    conn.commit()
+    conn.close()
+
+def fetchall_db(query, params=()):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    result = cursor.fetchall()
+    conn.close()
+    return result
+
+# ---------------- Service Functions ----------------
+def get_all_service_types():
+    return fetchall_db("SELECT id, name, description FROM service_types")
+
+def add_service_type(name, description):
+    try:
+        execute_db("INSERT INTO service_types (name, description) VALUES (?, ?)", (name, description))
+        return True
+    except:
+        return False
+
+def update_service_type(type_id, name, description):
+    try:
+        execute_db("UPDATE service_types SET name=?, description=? WHERE id=?", (name, description, type_id))
+        return True
+    except Exception as e:
+        print("Update Service Type Error:", e)
+        return False
+
+def delete_service_type(type_id):
+    try:
+        execute_db("DELETE FROM service_types WHERE id=?", (type_id,))
+        return True
+    except Exception as e:
+        print("Delete Service Type Error:", e)
+        return False
+
+def get_all_service_requests(filters=None):
+    query = """
+    SELECT r.id, t.name, r.customer_name, r.details, r.status, r.price, 
+           r.due_amount, r.payment_status, r.requested_at, r.completed_at
+    FROM service_requests r
+    LEFT JOIN service_types t ON r.service_type_id = t.id
+    """
+    params = []
+    if filters:
+        conditions = []
+        if "status" in filters:
+            conditions.append("r.status=?")
+            params.append(filters["status"])
+        if "payment_status" in filters:
+            conditions.append("r.payment_status=?")
+            params.append(filters["payment_status"])
+        if "service_type" in filters:
+            conditions.append("t.name=?")
+            params.append(filters["service_type"])
+        if "from_date" in filters and "to_date" in filters:
+            conditions.append("r.requested_at BETWEEN ? AND ?")
+            params.append(filters["from_date"])
+            params.append(filters["to_date"])
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY r.id DESC"
+    return fetchall_db(query, tuple(params))
+
+def add_service_request(service_type_id, customer_name, details, price):
+    try:
+        execute_db("""
+        INSERT INTO service_requests
+        (service_type_id, customer_name, details, price, status, due_amount, payment_status, requested_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (service_type_id, customer_name, details, price, "Pending", price, "Unpaid", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        return True
+    except Exception as e:
+        print("Add Service Request Error:", e)
+        return False
+
+def delete_service_request(request_id):
+    try:
+        execute_db("DELETE FROM service_requests WHERE id=?", (request_id,))
+        return True
+    except Exception as e:
+        print("Delete Request Error:", e)
+        return False
+
+def update_service_request_status(request_id, status):
+    try:
+        completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status=="Completed" else None
+        execute_db("UPDATE service_requests SET status=?, completed_at=? WHERE id=?", (status, completed_at, request_id))
+        if status=="Completed":
+            generate_invoice_pdf(request_id)
+        return True
+    except Exception as e:
+        print("Status Update Error:", e)
+        return False
+
+def update_request_payment(request_id, amount):
+    try:
+        data = fetchall_db("SELECT price, due_amount FROM service_requests WHERE id=?", (request_id,))[0]
+        total_price, due = data
+        new_due = max(due - amount, 0)
+        payment_status = "Paid" if new_due==0 else "Partial Paid"
+        execute_db("UPDATE service_requests SET due_amount=?, payment_status=? WHERE id=?", (new_due, payment_status, request_id))
+        auto_update_status()
+        return True
+    except Exception as e:
+        print("Payment Update Error:", e)
+        return False
+
+def generate_invoice_pdf(request_id):
+    data = fetchall_db("""
+        SELECT r.id, t.name, r.customer_name, r.details, r.price, r.due_amount, r.payment_status, r.completed_at
+        FROM service_requests r
+        LEFT JOIN service_types t ON r.service_type_id = t.id
+        WHERE r.id=?
+    """, (request_id,))
+    if not data:
+        return
+    r = data[0]
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "সার্ভিস ইনভয়েস", 0, 1, "C")
+    pdf.set_font("Arial", "", 12)
+    labels = ["রিকোয়েস্ট ID", "সার্ভিস টাইপ", "কাস্টমার", "বিস্তারিত", "মূল্য", "বাকি", "Payment Status", "Completed At"]
+    for lbl, val in zip(labels, r):
+        pdf.cell(50, 10, f"{lbl}: {val}", ln=1)
+    os.makedirs(os.path.join(os.path.dirname(__file__), "..", "invoices"), exist_ok=True)
+    invoice_path = os.path.join(os.path.dirname(__file__), "..", "invoices", f"Invoice_{r[0]}.pdf")
+    pdf.output(invoice_path)
+    webbrowser.open(invoice_path)
+
+# ---------------- Auto Status ----------------
+PENDING_TO_PROCESSING_DELAY = 5  # minutes
+BACKGROUND_INTERVAL = 60  # seconds
+
+def auto_update_status():
+    all_requests = fetchall_db("SELECT id, due_amount, status, payment_status, requested_at FROM service_requests")
+    now = datetime.now()
+    for r in all_requests:
+        request_id, due, status, payment_status, requested_at = r
+        requested_at_dt = datetime.strptime(requested_at, "%Y-%m-%d %H:%M:%S")
+        new_status = status
+        if status == "Pending" and payment_status == "Partial Paid":
+            if (now - requested_at_dt).total_seconds() >= PENDING_TO_PROCESSING_DELAY*60:
+                new_status = "Processing"
+        if due == 0:
+            new_status = "Completed"
+        if new_status != status:
+            update_service_request_status(request_id, new_status)
+
+def background_status_updater(ui_instance):
+    while True:
+        try:
+            auto_update_status()
+            if hasattr(ui_instance, 'req_tree'):
+                ui_instance.load_service_requests()
+        except Exception as e:
+            print("Background Updater Error:", e)
+        time.sleep(BACKGROUND_INTERVAL)
+
+def calculate_dashboard_summary():
+    data = get_all_service_requests()
+    summary = {"Pending":0,"Processing":0,"Completed":0,"Total Due":0.0}
+    for r in data:
+        summary[r[4]] += 1
+        summary["Total Due"] += r[6]
+    return summary
+
+# ---------------- UI ----------------
+class ServiceUI(ttk.Frame):
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.frame = self
+        self.pack(fill="both", expand=True)
+        tab_control = ttk.Notebook(self)
+        self.tab_type = ttk.Frame(tab_control)
+        self.tab_request = ttk.Frame(tab_control)
+        tab_control.add(self.tab_type, text='🛠️ সার্ভিস টাইপ')
+        tab_control.add(self.tab_request, text='📋 সার্ভিস রিকোয়েস্ট')
+        tab_control.pack(expand=1, fill='both')
+        self.setup_service_type_tab()
+        self.setup_service_request_tab()
+        threading.Thread(target=background_status_updater, args=(self,), daemon=True).start()
+
+    # ---------------- Service Type Tab ----------------
+    def setup_service_type_tab(self):
+        ttk.Label(self.tab_type, text="নাম:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
+        self.entry_type_name = ttk.Entry(self.tab_type)
+        self.entry_type_name.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(self.tab_type, text="বর্ণনা:").grid(row=1, column=0, padx=5, pady=5, sticky='e')
+        self.entry_type_description = ttk.Entry(self.tab_type)
+        self.entry_type_description.grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(self.tab_type, text="✅ যোগ করুন", command=self.add_service_type).grid(row=2, column=1, pady=10)
+        ttk.Button(self.tab_type, text="🔄 রিফ্রেশ", command=self.load_service_types).grid(row=2, column=0, pady=10)
+        ttk.Button(self.tab_type, text="✏️ Update", command=self.update_selected_type).grid(row=2, column=2, pady=10)
+        ttk.Button(self.tab_type, text="❌ Delete", command=self.delete_selected_type).grid(row=2, column=3, pady=10)
+
+        self.type_tree = ttk.Treeview(self.tab_type, columns=("ID", "Name", "Description"), show="headings")
+        for col in self.type_tree['columns']:
+            self.type_tree.heading(col, text=col)
+            self.type_tree.column(col, width=150, anchor='center')
+        self.type_tree.grid(row=3, column=0, columnspan=4, sticky='nsew')
+        scrollbar = ttk.Scrollbar(self.tab_type, orient='vertical', command=self.type_tree.yview)
+        self.type_tree.configure(yscroll=scrollbar.set)
+        scrollbar.grid(row=3, column=4, sticky='ns')
+        self.tab_type.grid_rowconfigure(3, weight=1)
+        self.tab_type.grid_columnconfigure(1, weight=1)
+        self.load_service_types()
+
+    def add_service_type(self):
+        name = self.entry_type_name.get().strip()
+        description = self.entry_type_description.get().strip()
+        if not name:
+            messagebox.showerror("ত্রুটি", "নাম অবশ্যই দিতে হবে।")
+            return
+        if add_service_type(name, description):
+            messagebox.showinfo("সফল", "সার্ভিস টাইপ যোগ হয়েছে!")
+            self.entry_type_name.delete(0, 'end')
+            self.entry_type_description.delete(0, 'end')
+            self.load_service_types()
+        else:
+            messagebox.showerror("ত্রুটি", "যোগ করা যায়নি।")
+
+    def load_service_types(self):
+        for row in self.type_tree.get_children():
+            self.type_tree.delete(row)
+        for t in get_all_service_types():
+            self.type_tree.insert("", 'end', values=t)
+
+    def update_selected_type(self):
+        selected = self.type_tree.selection()
+        if not selected:
+            messagebox.showwarning("Select", "একটি সার্ভিস টাইপ নির্বাচন করুন")
+            return
+        item = self.type_tree.item(selected[0])
+        type_id = item['values'][0]
+        new_name = self.entry_type_name.get().strip()
+        new_desc = self.entry_type_description.get().strip()
+        if not new_name:
+            messagebox.showerror("Error", "নাম দিতে হবে।")
+            return
+        if update_service_type(type_id, new_name, new_desc):
+            messagebox.showinfo("সফল", "সার্ভিস টাইপ আপডেট হয়েছে।")
+            self.entry_type_name.delete(0, 'end')
+            self.entry_type_description.delete(0, 'end')
+            self.load_service_types()
+        else:
+            messagebox.showerror("Error", "আপডেট করা যায়নি।")
+
+    def delete_selected_type(self):
+        selected = self.type_tree.selection()
+        if not selected:
+            messagebox.showwarning("Select", "একটি সার্ভিস টাইপ নির্বাচন করুন")
+            return
+        item = self.type_tree.item(selected[0])
+        type_id = item['values'][0]
+        if messagebox.askyesno("Confirm", "আপনি কি ডিলিট করতে চান?"):
+            if delete_service_type(type_id):
+                messagebox.showinfo("সফল", "সার্ভিস টাইপ ডিলিট হয়েছে।")
+                self.load_service_types()
+            else:
+                messagebox.showerror("Error", "ডিলিট করা যায়নি।")
+
+# ---------------- Service Request Tab, Export, Filter, Payment ----------------
+# (Service Request tab code + export + PDF + filter + payment)
+# ... (এই অংশটি আগের দুই অংশ মিলিয়ে দেওয়া কোড অনুযায়ী থাকবে)
+# ---------------- Service Request Tab ----------------
+    def setup_service_request_tab(self):
+        ttk.Label(self.tab_request, text="কাস্টমারের নাম:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
+        self.entry_customer_name = ttk.Entry(self.tab_request)
+        self.entry_customer_name.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(self.tab_request, text="সার্ভিস টাইপ:").grid(row=1, column=0, padx=5, pady=5, sticky='e')
+        self.combo_type = ttk.Combobox(self.tab_request, state='readonly')
+        self.combo_type.grid(row=1, column=1, padx=5, pady=5)
+
+        ttk.Label(self.tab_request, text="বিস্তারিত:").grid(row=2, column=0, padx=5, pady=5, sticky='e')
+        self.entry_details = ttk.Entry(self.tab_request)
+        self.entry_details.grid(row=2, column=1, padx=5, pady=5)
+
+        ttk.Label(self.tab_request, text="মূল্য:").grid(row=3, column=0, padx=5, pady=5, sticky='e')
+        self.entry_price = ttk.Entry(self.tab_request)
+        self.entry_price.grid(row=3, column=1, padx=5, pady=5)
+
+        ttk.Button(self.tab_request, text="✅ রিকোয়েস্ট যোগ করুন", command=self.add_request).grid(row=4, column=1, pady=10, sticky='e')
+        ttk.Button(self.tab_request, text="🔄 রিফ্রেশ", command=self.load_service_requests).grid(row=4, column=0, pady=10, sticky='w')
+        ttk.Button(self.tab_request, text="📄 Excel Export", command=self.export_excel).grid(row=4, column=2, pady=10, sticky='w')
+        ttk.Button(self.tab_request, text="🖨️ PDF Export", command=self.export_pdf).grid(row=4, column=3, pady=10, sticky='w')
+        ttk.Button(self.tab_request, text="⚙️ Interval/Delay", command=self.configure_interval_delay).grid(row=4, column=4, pady=10, sticky='w')
+        ttk.Button(self.tab_request, text="🔍 ফিল্টার", command=self.filter_requests).grid(row=4, column=5, pady=10, sticky='w')
+
+        self.req_tree = ttk.Treeview(
+            self.tab_request,
+            columns=("ID", "Type", "Customer", "Details", "Status", "Price", "Due", "Payment Status", "Requested At", "Completed At"),
+            show="headings"
+        )
+        for col in self.req_tree['columns']:
+            self.req_tree.heading(col, text=col)
+            self.req_tree.column(col, width=120, anchor='center')
+        self.req_tree.grid(row=5, column=0, columnspan=6, sticky='nsew')
+
+        scrollbar = ttk.Scrollbar(self.tab_request, orient='vertical', command=self.req_tree.yview)
+        self.req_tree.configure(yscroll=scrollbar.set)
+        scrollbar.grid(row=5, column=6, sticky='ns')
+
+        self.tab_request.grid_rowconfigure(5, weight=1)
+        self.tab_request.grid_columnconfigure(1, weight=1)
+
+        self.load_types_combobox()
+        self.load_service_requests()
+        self.req_tree.bind("<Double-1>", self.show_request_details)
+
+    def configure_interval_delay(self):
+        global BACKGROUND_INTERVAL, PENDING_TO_PROCESSING_DELAY
+        interval = simpledialog.askinteger("Background Interval", "Background Update Interval (seconds):", initialvalue=BACKGROUND_INTERVAL)
+        delay = simpledialog.askinteger("Pending→Processing Delay", "Pending → Processing Delay (minutes):", initialvalue=PENDING_TO_PROCESSING_DELAY)
+        if interval:
+            BACKGROUND_INTERVAL = interval
+        if delay:
+            PENDING_TO_PROCESSING_DELAY = delay
+        messagebox.showinfo("সফল", f"Interval: {BACKGROUND_INTERVAL}s, Pending→Processing Delay: {PENDING_TO_PROCESSING_DELAY}m সেট হয়েছে।")
+
+    def load_types_combobox(self):
+        self.service_types = get_all_service_types()
+        self.combo_type['values'] = [t[1] for t in self.service_types]
+
+    # --- Add / Load Requests ---
+    def add_request(self):
+        customer_name = self.entry_customer_name.get().strip()
+        details = self.entry_details.get().strip()
+        price = self.entry_price.get().strip()
+        type_index = self.combo_type.current()
+        if type_index == -1:
+            messagebox.showerror("ত্রুটি", "সার্ভিস টাইপ নির্বাচন করুন।")
+            return
+        service_type_id = self.service_types[type_index][0]
+        if not customer_name:
+            messagebox.showerror("ত্রুটি", "কাস্টমারের নাম দিতে হবে।")
+            return
+        if not price:
+            messagebox.showerror("ত্রুটি", "মূল্য দিতে হবে।")
+            return
+        try:
+            price = float(price)
+        except ValueError:
+            messagebox.showerror("ত্রুটি", "মূল্য সঠিক সংখ্যা হতে হবে।")
+            return
+        if add_service_request(service_type_id, customer_name, details, price):
+            messagebox.showinfo("সফল", "সার্ভিস রিকোয়েস্ট যোগ হয়েছে!")
+            self.entry_customer_name.delete(0, 'end')
+            self.entry_details.delete(0, 'end')
+            self.entry_price.delete(0, 'end')
+            self.load_service_requests()
+        else:
+            messagebox.showerror("ত্রুটি", "রিকোয়েস্ট যোগ করা যায়নি।")
+
+    def load_service_requests(self, filters=None):
+        auto_update_status()
+        for row in self.req_tree.get_children():
+            self.req_tree.delete(row)
+        for r in get_all_service_requests(filters):
+            self.req_tree.insert("", 'end', values=r)
+
+    # --- Show Request Details ---
+    def show_request_details(self, event):
+        selected = self.req_tree.selection()
+        if not selected:
+            return
+        item = self.req_tree.item(selected[0])
+        values = item['values']
+        popup = ttk.Toplevel(self)
+        popup.title(f"রিকোয়েস্ট বিস্তারিত (ID: {values[0]})")
+        labels = ["ID","Service Type","Customer","Details","Status","Price","Due","Payment Status","Requested At","Completed At"]
+        for i, (label, val) in enumerate(zip(labels, values)):
+            ttk.Label(popup, text=f"{label}: {val}").grid(row=i, column=0, padx=10, pady=5, sticky='w')
+        ttk.Label(popup, text="পরিশোধের পরিমাণ:").grid(row=len(labels), column=0, sticky='w', padx=10, pady=5)
+        pay_entry = ttk.Entry(popup)
+        pay_entry.grid(row=len(labels), column=1, padx=10, pady=5)
+        def update_payment():
+            try:
+                amount = float(pay_entry.get())
+            except:
+                messagebox.showerror("ত্রুটি", "সঠিক সংখ্যা দিন।")
+                return
+            update_request_payment(values[0], amount)
+            messagebox.showinfo("সফল", "পেমেন্ট আপডেট হয়েছে।")
+            popup.destroy()
+            self.load_service_requests()
+        ttk.Button(popup, text="💰 পরিশোধ আপডেট করুন", command=update_payment).grid(row=len(labels)+1, column=0, columnspan=2, pady=10)
+        def delete_request():
+            if messagebox.askyesno("নিশ্চিত", "আপনি কি রিকোয়েস্টটি ডিলিট করতে চান?"):
+                if delete_service_request(values[0]):
+                    messagebox.showinfo("সফল", "রিকোয়েস্ট ডিলিট হয়েছে।")
+                    popup.destroy()
+                    self.load_service_requests()
+                else:
+                    messagebox.showerror("ত্রুটি", "ডিলিট করা যায়নি।")
+        ttk.Button(popup, text="❌ রিকোয়েস্ট ডিলিট করুন", command=delete_request).grid(row=len(labels)+2, column=0, columnspan=2, pady=5)
+
+    # --- Export ---
+    def export_excel(self):
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files","*.xlsx")])
+        if not path: return
+        data = [self.req_tree.item(i)['values'] for i in self.req_tree.get_children()]
+        df = pd.DataFrame(data, columns=[c for c in self.req_tree['columns']])
+        df.to_excel(path, index=False)
+        messagebox.showinfo("সফল", f"Excel ফাইল তৈরি হয়েছে: {path}")
+
+    def export_pdf(self):
+        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF files","*.pdf")])
+        if not path: return
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 12)
+        for i, col in enumerate(self.req_tree['columns']):
+            pdf.cell(25, 10, col, 1, 0, 'C')
+        pdf.ln()
+        for row_id in self.req_tree.get_children():
+            values = self.req_tree.item(row_id)['values']
+            for val in values:
+                pdf.cell(25, 10, str(val), 1, 0, 'C')
+            pdf.ln()
+        pdf.output(path)
+        messagebox.showinfo("সফল", f"PDF তৈরি হয়েছে: {path}")
+
+    # --- Filtering ---
+    def filter_requests(self):
+        popup = ttk.Toplevel(self)
+        popup.title("Filter Requests")
+        ttk.Label(popup, text="Status:").grid(row=0, column=0, padx=5, pady=5)
+        status_cb = ttk.Combobox(popup, values=["Pending","Processing","Completed"], state="readonly")
+        status_cb.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(popup, text="Payment Status:").grid(row=1, column=0, padx=5, pady=5)
+        payment_cb = ttk.Combobox(popup, values=["Unpaid","Partial Paid","Paid"], state="readonly")
+        payment_cb.grid(row=1, column=1, padx=5, pady=5)
+        ttk.Label(popup, text="Service Type:").grid(row=2, column=0, padx=5, pady=5)
+        service_cb = ttk.Combobox(popup, values=[t[1] for t in get_all_service_types()], state="readonly")
+        service_cb.grid(row=2, column=1, padx=5, pady=5)
+        ttk.Label(popup, text="From Date (YYYY-MM-DD):").grid(row=3, column=0, padx=5, pady=5)
+        from_entry = ttk.Entry(popup)
+        from_entry.grid(row=3, column=1, padx=5, pady=5)
+        ttk.Label(popup, text="To Date (YYYY-MM-DD):").grid(row=4, column=0, padx=5, pady=5)
+        to_entry = ttk.Entry(popup)
+        to_entry.grid(row=4, column=1, padx=5, pady=5)
+        def apply_filter():
+            filters = {}
+            if status_cb.get(): filters["status"] = status_cb.get()
+            if payment_cb.get(): filters["payment_status"] = payment_cb.get()
+            if service_cb.get(): filters["service_type"] = service_cb.get()
+            if from_entry.get() and to_entry.get():
+                filters["from_date"] = from_entry.get()
+                filters["to_date"] = to_entry.get()
+            self.load_service_requests(filters)
+            popup.destroy()
+        ttk.Button(popup, text="Apply Filter", command=apply_filter).grid(row=5, column=0, columnspan=2, pady=10)

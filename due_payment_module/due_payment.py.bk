@@ -1,0 +1,133 @@
+import sqlite3
+from datetime import datetime
+from db import get_connection
+
+# =========================
+# Core CRUD Functions
+# =========================
+
+def get_all_due_payments():
+    """
+    সকল due payment রিটার্ন করবে।
+    Sales ও Service dues সিঙ্ক করা থাকবে।
+    """
+    sync_due_from_sales_and_service()  # Ensure up-to-date
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, customer, amount, due_date, sale_id, date FROM due_payment")
+    rows = cursor.fetchall()
+    conn.close()
+
+    due_list = []
+    for row in rows:
+        due_list.append({
+            'id': row[0],
+            'customer': str(row[1]) if row[1] else '',
+            'amount': float(row[2]) if row[2] else 0.0,
+            'due_date': row[3] if row[3] else '',
+            'sale_id': row[4],
+            'date': row[5] if row[5] else ''
+        })
+    return due_list
+
+def add_due_payment(customer, amount, due_date, sale_id=None, **kwargs):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO due_payment (customer, amount, due_date, sale_id, date)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        customer if customer else "Unknown",
+        amount,
+        due_date,
+        sale_id,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
+    conn.commit()
+    conn.close()
+
+def update_due_payment(due_id, customer=None, amount=None, due_date=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    updates = []
+    params = []
+    if customer is not None:
+        updates.append("customer=?")
+        params.append(customer if customer else "Unknown")
+    if amount is not None:
+        updates.append("amount=?")
+        params.append(amount)
+    if due_date is not None:
+        updates.append("due_date=?")
+        params.append(due_date)
+    query = "UPDATE due_payment SET " + ", ".join(updates) + " WHERE id=?"
+    params.append(due_id)
+    cursor.execute(query, params)
+    conn.commit()
+    conn.close()
+
+def delete_due_payment(due_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM due_payment WHERE id=?", (due_id,))
+    conn.commit()
+    conn.close()
+
+# =========================
+# Sync Function: Sales + Service
+# =========================
+
+def sync_due_from_sales_and_service():
+    """
+    Sales এবং Service dues থেকে central due_payment টেবিলে sync করে।
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # =========================
+    # Sync Sales dues
+    # =========================
+    cursor.execute("SELECT id, customer_name, due_amount, date FROM sales WHERE due_amount>0")
+    sales_dues = cursor.fetchall()
+
+    for row in sales_dues:
+        sale_id, customer, amount, due_date = row
+        customer = customer if customer else "Unknown"
+
+        # Check if already in due_payment
+        cursor.execute("SELECT id FROM due_payment WHERE sale_id=? AND customer=?", (sale_id, customer))
+        exists = cursor.fetchone()
+        if exists:
+            # Update existing
+            cursor.execute("UPDATE due_payment SET amount=?, due_date=? WHERE id=?", (amount, due_date, exists[0]))
+        else:
+            # Insert new
+            cursor.execute("""
+                INSERT INTO due_payment (customer, amount, due_date, sale_id, date)
+                VALUES (?, ?, ?, ?, ?)
+            """, (customer, amount, due_date, sale_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+    # =========================
+    # Sync Service dues
+    # =========================
+    cursor.execute("SELECT id, customer_name, due_amount, requested_at FROM service_requests WHERE due_amount>0")
+    service_dues = cursor.fetchall()
+
+    for row in service_dues:
+        service_id, customer, amount, due_date = row
+        customer = customer if customer else "Unknown"
+
+        # Check if already in due_payment (sale_id=NULL)
+        cursor.execute("SELECT id FROM due_payment WHERE sale_id IS NULL AND customer=? AND due_date=?", (customer, due_date))
+        exists = cursor.fetchone()
+        if exists:
+            cursor.execute("UPDATE due_payment SET amount=? WHERE id=?", (amount, exists[0]))
+        else:
+            cursor.execute("""
+                INSERT INTO due_payment (customer, amount, due_date, sale_id, date)
+                VALUES (?, ?, ?, ?, ?)
+            """, (customer, amount, due_date, None, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+    conn.commit()
+    conn.close()

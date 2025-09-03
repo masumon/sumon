@@ -1,0 +1,18 @@
+2025-08-30 02:07:02 [INFO] === Starting Sale Function Scan ===
+2025-08-30 02:07:03 [INFO] Found 3 function calls:
+2025-08-30 02:07:03 [INFO] File: D:\abo_enterprise_project\smartshop_pos\db.py | Line: 354 | Function: add_sale
+2025-08-30 02:07:03 [INFO] File: D:\abo_enterprise_project\smartshop_pos\db.py | Line: 372 | Function: update_product
+2025-08-30 02:07:03 [INFO] File: D:\abo_enterprise_project\smartshop_pos\db.py | Line: 418 | Function: add_sale
+2025-08-30 02:07:03 [INFO] 
+=== DUPLICATE / MULTIPLE CALLS DETECTED ===
+2025-08-30 02:07:03 [INFO] Function 'add_sale' in file 'D:\abo_enterprise_project\smartshop_pos\db.py' called multiple times at lines: [354, 418]
+2025-08-30 02:07:03 [INFO] === Scan Completed ===
+2025-08-30 02:07:59 [INFO] === Starting Sale Function Scan ===
+2025-08-30 02:07:59 [INFO] Found 3 function calls:
+2025-08-30 02:07:59 [INFO] File: D:\abo_enterprise_project\smartshop_pos\db.py | Line: 354 | Function: add_sale
+2025-08-30 02:07:59 [INFO] File: D:\abo_enterprise_project\smartshop_pos\db.py | Line: 372 | Function: update_product
+2025-08-30 02:07:59 [INFO] File: D:\abo_enterprise_project\smartshop_pos\db.py | Line: 418 | Function: add_sale
+2025-08-30 02:07:59 [INFO] 
+=== DUPLICATE / MULTIPLE CALLS DETECTED ===
+2025-08-30 02:07:59 [INFO] Function 'add_sale' in file 'D:\abo_enterprise_project\smartshop_pos\db.py' called multiple times at lines: [354, 418]
+2025-08-30 02:07:59 [INFO] === Scan Completed ===

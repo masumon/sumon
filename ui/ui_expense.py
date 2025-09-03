@@ -1,188 +1,180 @@
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# ui/ui_expense.py
+
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+import os
+import sqlite3
 from datetime import datetime
-from expense_module import expense_category, expense, expense_report
 
-class ExpenseUI(tk.Frame):
-    def __init__(self, master):
-        super().__init__(master, bg="#f9f9f9")
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "smartshop.db")
+
+# ---------------- Database Functions ----------------
+def get_all_expenses():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, category_id, amount, date, note FROM expenses ORDER BY date DESC")
+    expenses = cursor.fetchall()
+    conn.close()
+    return expenses
+
+def add_expense(category_id, amount, date, note):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO expenses (category_id, amount, date, note) VALUES (?, ?, ?, ?)",
+                       (category_id, amount, date, note))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        messagebox.showerror("ব্যয় যোগ করার ত্রুটি", str(e))
+        return False
+
+def update_expense(expense_id, category_id, amount, date, note):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE expenses SET category_id=?, amount=?, date=?, note=? WHERE id=?",
+                       (category_id, amount, date, note, expense_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        messagebox.showerror("ব্যয় আপডেট করার ত্রুটি", str(e))
+        return False
+
+def delete_expense(expense_id):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        messagebox.showerror("ব্যয় মুছার ত্রুটি", str(e))
+        return False
+
+# ---------------- UI Class ----------------
+class ExpenseUI(ttk.Frame):
+    """ব্যয় ব্যবস্থাপনা UI"""
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.frame = self
         self.pack(fill="both", expand=True)
+        self.selected_expense_id = None
 
-        # UI তৈরি ও ডাটা লোড
+        # ===== স্টাইল =====
+        self.style = ttk.Style()
+        self.style.configure(
+            "Header.TLabel",
+            font=("Kalpurush", 22, "bold"),
+            foreground="#1a237e",
+            background="#f3f6fa",
+        )
+
+        # ===== উপরের বড় শিরোনাম =====
+        header_label = ttk.Label(self, text="খরচ ব্যবস্থাপনা", style="Header.TLabel")
+        header_label.pack(pady=(10, 20))
+
+        # ===== মূল ফর্ম =====
         self.create_widgets()
-        self.load_categories()
         self.load_expenses()
 
     def create_widgets(self):
-        # ক্যাটেগরি ফ্রেম
-        cat_frame = ttk.LabelFrame(self, text="ক্যাটেগরি যোগ করুন")
-        cat_frame.pack(fill="x", padx=10, pady=5)
+        # ===== ফর্ম ফ্রেম =====
+        form_frame = ttk.LabelFrame(self, text="ব্যয় বিস্তারিত", padding=(10,10))
+        form_frame.pack(fill="x", padx=10, pady=5)
 
-        ttk.Label(cat_frame, text="ক্যাটেগরির নাম:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.cat_name_var = tk.StringVar()
-        ttk.Entry(cat_frame, textvariable=self.cat_name_var, width=30).grid(row=0, column=1, padx=5, pady=5)
-        ttk.Button(cat_frame, text="যোগ করুন", command=self.add_category).grid(row=0, column=2, padx=5, pady=5)
+        ttk.Label(form_frame, text="ক্যাটেগরি ID:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(form_frame, text="পরিমাণ:").grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        ttk.Label(form_frame, text="তারিখ:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(form_frame, text="বিবরণ:").grid(row=1, column=2, sticky="w", padx=5, pady=5)
 
-        # খরচ ফ্রেম
-        expense_frame = ttk.LabelFrame(self, text="খরচ যোগ করুন")
-        expense_frame.pack(fill="x", padx=10, pady=5)
+        self.category_var = tk.StringVar()
+        self.amount_var = tk.DoubleVar()
+        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M"))
+        self.note_var = tk.StringVar()
 
-        ttk.Label(expense_frame, text="ক্যাটেগরি:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.exp_cat_var = tk.StringVar()
-        self.exp_cat_combo = ttk.Combobox(expense_frame, textvariable=self.exp_cat_var, state="readonly", width=28)
-        self.exp_cat_combo.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Entry(form_frame, textvariable=self.category_var).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Entry(form_frame, textvariable=self.amount_var).grid(row=0, column=3, padx=5, pady=5)
+        ttk.Entry(form_frame, textvariable=self.date_var).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Entry(form_frame, textvariable=self.note_var).grid(row=1, column=3, padx=5, pady=5)
 
-        ttk.Label(expense_frame, text="পরিমাণ:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
-        self.amount_var = tk.StringVar()
-        ttk.Entry(expense_frame, textvariable=self.amount_var, width=15).grid(row=0, column=3, padx=5, pady=5)
+        btn_frame = ttk.Frame(form_frame)
+        btn_frame.grid(row=2, column=0, columnspan=4, pady=10)
+        ttk.Button(btn_frame, text="যোগ করুন", bootstyle="success", command=self.add_expense).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="আপডেট করুন", bootstyle="primary", command=self.update_expense).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="মুছুন", bootstyle="danger", command=self.delete_expense).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="ফর্ম খালি করুন", bootstyle="secondary", command=self.clear_form).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="🔄 রিফ্রেশ", bootstyle="info", command=self.load_expenses).pack(side="left", padx=5)
 
-        ttk.Label(expense_frame, text="বিবরণ:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.desc_var = tk.StringVar()
-        ttk.Entry(expense_frame, textvariable=self.desc_var, width=60).grid(row=1, column=1, columnspan=3, padx=5, pady=5)
+        # ===== Treeview ফ্রেম =====
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        columns = ("id", "category_id", "amount", "date", "note")
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", bootstyle="info")
+        for col in columns:
+            self.tree.heading(col, text=col.replace("_", " ").capitalize())
+            self.tree.column(col, anchor="center", width=100)
+        self.tree.pack(fill="both", expand=True, side="left")
 
-        ttk.Label(expense_frame, text="তারিখ (YYYY-MM-DD):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
-        ttk.Entry(expense_frame, textvariable=self.date_var, width=15).grid(row=2, column=1, padx=5, pady=5)
+        # ===== স্ক্রলবার =====
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
 
-        ttk.Button(expense_frame, text="খরচ যোগ করুন", command=self.add_expense).grid(row=2, column=3, padx=5, pady=5)
+        self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
-        # খরচ তালিকা ফ্রেম
-        list_frame = ttk.LabelFrame(self, text="খরচ তালিকা")
-        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-        columns = ("id", "category", "amount", "description", "date")
-        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings")
-        self.tree.heading("id", text="আইডি")
-        self.tree.column("id", width=50, anchor="center")
-        self.tree.heading("category", text="ক্যাটেগরি")
-        self.tree.column("category", width=150, anchor="w")
-        self.tree.heading("amount", text="পরিমাণ")
-        self.tree.column("amount", width=100, anchor="e")
-        self.tree.heading("description", text="বিবরণ")
-        self.tree.column("description", width=300, anchor="w")
-        self.tree.heading("date", text="তারিখ")
-        self.tree.column("date", width=100, anchor="center")
-        self.tree.pack(fill="both", expand=True)
-
-        ttk.Button(list_frame, text="মুছে ফেলুন", command=self.delete_expense).pack(pady=5)
-
-        # রিপোর্ট ফ্রেম
-        report_frame = ttk.LabelFrame(self, text="তারিখ অনুযায়ী রিপোর্ট")
-        report_frame.pack(fill="x", padx=10, pady=5)
-
-        ttk.Label(report_frame, text="শুরু তারিখ (YYYY-MM-DD):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.start_date_var = tk.StringVar()
-        ttk.Entry(report_frame, textvariable=self.start_date_var, width=15).grid(row=0, column=1, padx=5, pady=5)
-
-        ttk.Label(report_frame, text="শেষ তারিখ (YYYY-MM-DD):").grid(row=0, column=2, padx=5, pady=5, sticky="w")
-        self.end_date_var = tk.StringVar()
-        ttk.Entry(report_frame, textvariable=self.end_date_var, width=15).grid(row=0, column=3, padx=5, pady=5)
-
-        ttk.Button(report_frame, text="রিপোর্ট দেখুন", command=self.show_report).grid(row=0, column=4, padx=5, pady=5)
-
-        self.report_text = tk.Text(report_frame, height=8, wrap="word")
-        self.report_text.grid(row=1, column=0, columnspan=5, padx=5, pady=5, sticky="ew")
-
-    def load_categories(self):
-        categories = expense_category.get_all_categories()
-        names = [c[1] for c in categories]
-        self.exp_cat_combo['values'] = names
-        if names:
-            self.exp_cat_combo.current(0)
-
-    def add_category(self):
-        name = self.cat_name_var.get().strip()
-        if not name:
-            messagebox.showwarning("সতর্কতা", "ক্যাটেগরির নাম দিন")
-            return
-        expense_category.add_category(name)
-        messagebox.showinfo("সফল", "ক্যাটেগরি যোগ করা হয়েছে")
-        self.cat_name_var.set("")
-        self.load_categories()
-
-    def add_expense(self):
-        category_name = self.exp_cat_var.get()
-        categories = expense_category.get_all_categories()
-        category_dict = {name: cid for cid, name in categories}
-        category_id = category_dict.get(category_name)
-
-        if category_id is None:
-            messagebox.showerror("ত্রুটি", "সঠিক ক্যাটেগরি নির্বাচন করুন")
-            return
-
-        try:
-            amount = float(self.amount_var.get())
-        except ValueError:
-            messagebox.showerror("ত্রুটি", "সঠিক পরিমাণ দিন")
-            return
-
-        description = self.desc_var.get().strip()
-        expense_date = self.date_var.get().strip()
-
-        try:
-            datetime.strptime(expense_date, "%Y-%m-%d")
-        except ValueError:
-            messagebox.showerror("ত্রুটি", "তারিখের ফরম্যাট সঠিক নয় (YYYY-MM-DD)")
-            return
-
-        expense.add_expense(category_id, amount, description, expense_date)
-        messagebox.showinfo("সফল", "খরচ যোগ করা হয়েছে")
-
-        self.amount_var.set("")
-        self.desc_var.set("")
-        self.date_var.set(datetime.now().strftime("%Y-%m-%d"))
-        self.load_expenses()
-
+    # ===== Methods =====
     def load_expenses(self):
         for row in self.tree.get_children():
             self.tree.delete(row)
+        expenses = get_all_expenses()
+        for e in expenses:
+            self.tree.insert("", "end", values=e)
 
-        rows = expense.get_all_expenses()
-        for r in rows:
-            self.tree.insert("", "end", values=r)
+    def add_expense(self):
+        if add_expense(self.category_var.get(), self.amount_var.get(), self.date_var.get(), self.note_var.get()):
+            messagebox.showinfo("সফল", "ব্যয় সফলভাবে যোগ হয়েছে")
+            self.load_expenses()
+            self.clear_form()
+
+    def update_expense(self):
+        if not self.selected_expense_id:
+            messagebox.showwarning("সতর্কতা", "দয়া করে আপডেট করার জন্য একটি ব্যয় নির্বাচন করুন")
+            return
+        if update_expense(self.selected_expense_id, self.category_var.get(), self.amount_var.get(),
+                          self.date_var.get(), self.note_var.get()):
+            messagebox.showinfo("সফল", "ব্যয় সফলভাবে আপডেট হয়েছে")
+            self.load_expenses()
+            self.clear_form()
 
     def delete_expense(self):
-        selected = self.tree.selection()
-        if not selected:
-            messagebox.showwarning("সতর্কতা", "একটি খরচ নির্বাচন করুন")
+        if not self.selected_expense_id:
+            messagebox.showwarning("সতর্কতা", "দয়া করে মুছার জন্য একটি ব্যয় নির্বাচন করুন")
             return
+        if messagebox.askyesno("নিশ্চিত", "আপনি কি সত্যিই এই ব্যয় মুছতে চান?"):
+            if delete_expense(self.selected_expense_id):
+                messagebox.showinfo("সফল", "ব্যয় সফলভাবে মুছে ফেলা হয়েছে")
+                self.load_expenses()
+                self.clear_form()
 
-        confirm = messagebox.askyesno("নিশ্চিতকরণ", "আপনি কি এই খরচটি মুছে ফেলতে চান?")
-        if not confirm:
-            return
+    def on_tree_select(self, event):
+        selected = self.tree.focus()
+        if selected:
+            values = self.tree.item(selected, "values")
+            self.selected_expense_id = values[0]
+            self.category_var.set(values[1])
+            self.amount_var.set(values[2])
+            self.date_var.set(values[3])
+            self.note_var.set(values[4])
 
-        item = self.tree.item(selected[0])
-        expense_id = item['values'][0]
-        expense.delete_expense(expense_id)
-        messagebox.showinfo("সফল", "খরচ মুছে ফেলা হয়েছে")
-        self.load_expenses()
-
-    def show_report(self):
-        start = self.start_date_var.get().strip()
-        end = self.end_date_var.get().strip()
-
-        if not start or not end:
-            messagebox.showwarning("সতর্কতা", "শুরু ও শেষ তারিখ দিন")
-            return
-
-        try:
-            datetime.strptime(start, "%Y-%m-%d")
-            datetime.strptime(end, "%Y-%m-%d")
-        except ValueError:
-            messagebox.showerror("ত্রুটি", "তারিখের ফরম্যাট সঠিক নয় (YYYY-MM-DD)")
-            return
-
-        report = expense_report.get_expense_report_by_date(start, end)
-
-        self.report_text.delete("1.0", tk.END)
-        if not report:
-            self.report_text.insert(tk.END, "কোন খরচ পাওয়া যায়নি।\n")
-            return
-
-        self.report_text.insert(tk.END, f"{'ক্যাটেগরি':<20} | {'মোট পরিমাণ':>10}\n")
-        self.report_text.insert(tk.END, "-"*35 + "\n")
-        for cat_name, total in report:
-            self.report_text.insert(tk.END, f"{cat_name:<20} | {total:>10.2f}\n")
+    def clear_form(self):
+        self.selected_expense_id = None
+        self.category_var.set("")
+        self.amount_var.set(0.0)
+        self.date_var.set(datetime.now().strftime("%Y-%m-%d %H:%M"))
+        self.note_var.set("")

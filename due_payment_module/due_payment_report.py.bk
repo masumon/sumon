@@ -1,0 +1,68 @@
+# due_payment_module/report_due.py
+
+from db import get_connection
+
+def get_due_payments_report(start_date=None, end_date=None):
+    """
+    Central due_payment টেবিল থেকে Sales + Service dues রিপোর্ট।
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT id, customer, amount, due_date, sale_id, date FROM due_payment WHERE 1=1"
+    params = []
+
+    if start_date and end_date:
+        query += " AND due_date BETWEEN ? AND ?"
+        params = [start_date, end_date]
+    elif start_date:
+        query += " AND due_date >= ?"
+        params = [start_date]
+    elif end_date:
+        query += " AND due_date <= ?"
+        params = [end_date]
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    combined = []
+    for row in rows:
+        combined.append({
+            "id": row[0],
+            "customer": row[1],
+            "amount": row[2],
+            "due_date": row[3],
+            "sale_id": row[4],
+            "date": row[5]
+        })
+
+    combined.sort(key=lambda x: x["due_date"] or "")
+    return combined
+
+
+def get_customer_due_summary(customer_name):
+    """
+    একটি নির্দিষ্ট কাস্টমারের total dues রিপোর্ট।
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Total dues
+    cursor.execute("SELECT SUM(amount) FROM due_payment WHERE customer=?", (customer_name,))
+    total_due = cursor.fetchone()[0] or 0
+
+    # Sales dues
+    cursor.execute("SELECT SUM(amount) FROM due_payment WHERE customer=? AND sale_id IS NOT NULL", (customer_name,))
+    total_sales_due = cursor.fetchone()[0] or 0
+
+    # Service dues (sale_id NULL হলে ধরে নিচ্ছি service dues)
+    cursor.execute("SELECT SUM(amount) FROM due_payment WHERE customer=? AND sale_id IS NULL", (customer_name,))
+    total_service_due = cursor.fetchone()[0] or 0
+
+    conn.close()
+    return {
+        "total_due": total_due,
+        "total_sales_due": total_sales_due,
+        "total_service_due": total_service_due
+    }
