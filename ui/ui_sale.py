@@ -70,7 +70,7 @@ class SaleUI:
                 "qty": "পরিমাণ",
                 "discount": "ছাড় (৳)",
                 "add_to_cart": "কার্টে যোগ করুন",
-                "purchase_price": "ক্রয় মূল্য",
+                "purchase_price": "ক্রয় মূল্য",
                 "stock": "মজুদ",
                 "sale_price": "বিক্রয় মূল্য",
                 "line_total": "লাইন টোটাল (৳):",
@@ -86,7 +86,7 @@ class SaleUI:
                 "export_excel": "Export (Excel)",
                 "print_receipt": "রসিদ মুদ্রণ",
                 "recent_sale": "সাম্প্রতিক বিক্রয়",
-                "due_payment": "বাকি প্রদায়ন",
+                "due_payment": "বাকি প্রদায়ন",
                 "customer_col": "গ্রাহক",
                 "amount_col": "পরিমাণ",
                 "date_col": "তারিখ",
@@ -170,7 +170,7 @@ class SaleUI:
         tb.Button(top_frame, text=self.texts["bn"]["lang_toggle"], width=3, command=self.toggle_language).pack(side="right", padx=4)
         self.btn_help = tb.Button(top_frame, text=self.texts["bn"]["help"], width=2, command=self.show_help)
         self.btn_help.pack(side="right", padx=2)
-        ToolTip(self.btn_help, "সহায়তা | Help")
+        ToolTip(self.btn_help, "সহায়তা | Help")
 
         # ---------- Product selection ----------
         product_frame = tb.Frame(self.frame)
@@ -314,7 +314,7 @@ class SaleUI:
             self.due_tree.heading(col, text=self.texts["bn"].get(col, col))
             self.due_tree.column(col, anchor=tk.CENTER, width=100)
         self.due_tree.pack(fill="both", expand=True)
-        ToolTip(self.due_tree, "বাকি প্রদায়ন | Due payments")
+        ToolTip(self.due_tree, "বাকি প্রদায়ন | Due payments")
 
         # ---------- Monthly summary table ----------
         monthly_frame = tb.Labelframe(self.frame, text=self.texts["bn"]["monthly_sale"], padding=6, bootstyle="info")
@@ -355,8 +355,8 @@ class SaleUI:
         self.btn_help.config(text=t["help"])
         self.btn_add_cart.config(text=t["add_to_cart"])
         self.product_info_var.set(f"{t['purchase_price']}: - | "
-                                  f"{t['stock']}: - | "
-                                  f"{t['sale_price']}: -")
+                                 f"{t['stock']}: - | "
+                                 f"{t['sale_price']}: -")
         self.label_line_total.config(text=t["line_total"])
         self.btn_remove_selected.config(text=t["del_selected"])
         self.btn_clear_cart.config(text=t["clear_cart"])
@@ -378,15 +378,15 @@ class SaleUI:
     # ---------- Help popup ----------
     def show_help(self):
         help_text_bn = (
-            "বিক্রয় UI ব্যবহারের টিপস:\n"
+            "বিক্রয় UI ব্যবহারের টিপস:\n"
             "- পণ্য খুঁজুন (Ctrl+F)\n"
-            "- পরিমাণ/ছাড় দিয়ে কার্টে যোগ করুন (Enter)\n"
+            "- পরিমাণ/ছাড় দিয়ে কার্টে যোগ করুন (Enter)\n"
             "- কার্ট থেকে পণ্য মুছে ফেলুন বা খালি করুন\n"
             "- বিক্রয়কারী/গ্রাহক/প্রদেয়/বাকি/পেমেন্ট নির্বাচন\n"
             "- বিক্রয় সম্পন্ন করুন (Enter)\n"
             "- Export/Print/Refresh\n"
             "- ভাষা টগল (EN/BN)\n"
-            "- Tooltip-এ হোভার করলে সাহায্য পাওয়া যাবে\n"
+            "- Tooltip-এ হোভার করলে সাহায্য পাওয়া যাবে\n"
         )
         help_text_en = (
             "Sale UI Usage Tips:\n"
@@ -443,8 +443,8 @@ class SaleUI:
         else:
             self.product_combo.set("")
             self.product_info_var.set(f"{self.texts[self.lang.get()]['purchase_price']}: - | "
-                                      f"{self.texts[self.lang.get()]['stock']}: - | "
-                                      f"{self.texts[self.lang.get()]['sale_price']}: -")
+                                     f"{self.texts[self.lang.get()]['stock']}: - | "
+                                     f"{self.texts[self.lang.get()]['sale_price']}: -")
             self.current_line_total_var.set(0.0)
 
     # ---------- Enhanced Search/Filter & Live Suggestion ----------
@@ -463,8 +463,8 @@ class SaleUI:
             else:
                 self.product_combo.set("")
                 self.product_info_var.set(f"{self.texts[self.lang.get()]['purchase_price']}: - | "
-                                          f"{self.texts[self.lang.get()]['stock']}: - | "
-                                          f"{self.texts[self.lang.get()]['sale_price']}: -")
+                                         f"{self.texts[self.lang.get()]['stock']}: - | "
+                                         f"{self.texts[self.lang.get()]['sale_price']}: -")
                 self.current_line_total_var.set(0.0)
 
     def show_product_details(self, event=None):
@@ -520,7 +520,7 @@ class SaleUI:
         for pid, item in self.cart_items.items():
             line_total = max(0.0, item["quantity"] * item["unit_price"] - item["discount"])
             self.cart_tree.insert("", "end", iid=str(pid),
-                                  values=(item["name"], item["quantity"], item["unit_price"], item["discount"], line_total))
+                                 values=(item["name"], item["quantity"], item["unit_price"], item["discount"], line_total))
             total += line_total
         self.cart_total_var.set(total)
         self.update_due_amount()
@@ -561,36 +561,26 @@ class SaleUI:
                 return
 
         try:
-            for pid, item in self.cart_items.items():
-                qty = item["quantity"]
-                unit_price = item["unit_price"]
-                discount = item["discount"]
-                total = max(0.0, qty * unit_price - discount)
-                cart_total = self.cart_total_var.get()
-                proportion = total / cart_total if cart_total > 0 else 0
-                item_paid = paid_amount * proportion
-                item_due = max(0.0, total - item_paid)
-                sale_id = sale_and_stock_update(
-                    product_id=pid,
-                    quantity=qty,
-                    sale_price=unit_price,
-                    discount=discount,
-                    tax=0.0,
-                    sold_by=seller,
-                    due_amount=item_due,
-                    due_received_by=customer,
-                    barcode=None
-                )
-                add_stock(
-                    product_id=pid,
-                    quantity=-qty,
-                    added_date=sale_date,
-                    entry_type='sale',
-                    location='main',
-                    note=f"Sold by {seller} (customer: {customer})"
-                )
+            # Calculate due_amount for the whole sale
+            total_price = self.cart_total_var.get()
+            due_amount = max(0.0, total_price - paid_amount)
+            
+            # Use the new function signature
+            sale_id = sale_and_stock_update(
+                product_list=self.cart_items,
+                total_price=total_price,
+                discount=sum(item["discount"] for item in self.cart_items.values()),
+                due_amount=due_amount,
+                due_received_by=customer if due_amount > 0 else None,
+                seller_name=seller,
+                customer_name=customer,
+                payment_method=payment_method,
+                txn_id=txn_id,
+                mobile_no=mobile,
+            )
+
             self.sale_success_animation()
-            messagebox.showinfo("Success", f"{self.texts[self.lang.get()]['sale_success']} {self.cart_total_var.get():.2f} ৳")
+            messagebox.showinfo("Success", f"{self.texts[self.lang.get()]['sale_success']} {total_price:.2f} ৳")
             self.clear_cart()
             self.load_products()
             self.load_today_total()
@@ -598,7 +588,8 @@ class SaleUI:
             self.load_monthly_sales()
             self.load_due_payments()
         except Exception as e:
-            messagebox.showerror("Error", f"বিক্রয় সম্পন্ন হয়নি:\n{e}")
+            messagebox.showerror("Error", f"বিক্রয় সম্পন্ন হয়নি:\n{e}")
+
 
     def sale_success_animation(self):
         # Animation: just flash the frame border color
@@ -631,7 +622,7 @@ class SaleUI:
                     s["quantity"],
                     s["total"],
                     s["due_amount"],
-                    s["due_received_by"] if s["due_received_by"] else "-"
+                    s["customer_name"] if s["customer_name"] else "-"
                 ))
         except Exception:
             pass
@@ -674,10 +665,10 @@ class SaleUI:
         data = []
         for pid, item in self.cart_items.items():
             data.append({self.texts[self.lang.get()]["product"]: item["name"],
-                         self.texts[self.lang.get()]["qty"]: item["quantity"],
-                         "Unit Price": item["unit_price"],
-                         self.texts[self.lang.get()]["discount"]: item["discount"],
-                         "Total": max(0.0, item["unit_price"]*item["quantity"]-item["discount"])})
+                          self.texts[self.lang.get()]["qty"]: item["quantity"],
+                          "Unit Price": item["unit_price"],
+                          self.texts[self.lang.get()]["discount"]: item["discount"],
+                          "Total": max(0.0, item["unit_price"]*item["quantity"]-item["discount"])})
         df = pd.DataFrame(data)
         filename = f"sale_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         try:
@@ -701,7 +692,7 @@ class SaleUI:
         c.drawString(50, y, f"{self.texts[self.lang.get()]['date']}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         y -= 20
         c.drawString(50, y, f"{self.texts[self.lang.get()]['seller']}: {self.seller_var.get()} | "
-                            f"{self.texts[self.lang.get()]['customer']}: {self.customer_var.get()}")
+                                 f"{self.texts[self.lang.get()]['customer']}: {self.customer_var.get()}")
         y -= 30
         c.drawString(50, y, f"{self.texts[self.lang.get()]['product']:20}{self.texts[self.lang.get()]['qty']:>8}{'একক':>8}{self.texts[self.lang.get()]['discount']:>8}{'মোট':>8}")
         y -= 20

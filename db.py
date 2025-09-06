@@ -36,9 +36,62 @@ def db_retry(func):
 # Tables initialization
 # ---------------------------
 @db_retry
+def add_due_source_column_if_not_exists():
+    """
+    Checks if the 'source' column exists in the 'due' table and adds it if it doesn't.
+    This ensures backward compatibility for existing databases.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(due)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'source' not in columns:
+            print("Adding 'source' column to 'due' table...")
+            cursor.execute("ALTER TABLE due ADD COLUMN source TEXT")
+            conn.commit()
+
+@db_retry
+def update_db_schema():
+    """
+    Updates the database schema by adding new columns to existing tables.
+    This ensures the database is compatible with new features without a full reset.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Add new columns to 'due_payment' table
+        cursor.execute("PRAGMA table_info(due_payment)")
+        due_payment_cols = [col[1] for col in cursor.fetchall()]
+        if 'balance_due' not in due_payment_cols:
+            cursor.execute("ALTER TABLE due_payment ADD COLUMN balance_due REAL DEFAULT 0")
+        if 'payment_method' not in due_payment_cols:
+            cursor.execute("ALTER TABLE due_payment ADD COLUMN payment_method TEXT")
+        if 'invoice_no' not in due_payment_cols:
+            cursor.execute("ALTER TABLE due_payment ADD COLUMN invoice_no TEXT")
+
+        # Add new columns to 'sales' table
+        cursor.execute("PRAGMA table_info(sales)")
+        sales_cols = [col[1] for col in cursor.fetchall()]
+        if 'payment_method' not in sales_cols:
+            cursor.execute("ALTER TABLE sales ADD COLUMN payment_method TEXT")
+        if 'txn_id' not in sales_cols:
+            cursor.execute("ALTER TABLE sales ADD COLUMN txn_id TEXT")
+        if 'mobile_no' not in sales_cols:
+            cursor.execute("ALTER TABLE sales ADD COLUMN mobile_no TEXT")
+        
+        # Add new columns to 'service_requests' table
+        cursor.execute("PRAGMA table_info(service_requests)")
+        service_requests_cols = [col[1] for col in cursor.fetchall()]
+        if 'customer_mobile_no' not in service_requests_cols:
+            cursor.execute("ALTER TABLE service_requests ADD COLUMN customer_mobile_no TEXT")
+        
+        conn.commit()
+
+@db_retry
 def init_all_tables():
     with get_connection() as conn:
         cursor = conn.cursor()
+        
         # Products
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS products (
@@ -85,6 +138,7 @@ def init_all_tables():
                 barcode TEXT,
                 sold_by TEXT,
                 invoice_no TEXT,
+                customer_name TEXT,
                 FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
             )
         """)
@@ -136,6 +190,7 @@ def init_all_tables():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 customer TEXT NOT NULL,
                 amount REAL NOT NULL,
+                source TEXT,
                 date TEXT NOT NULL
             )
         """)
@@ -181,6 +236,12 @@ def init_all_tables():
             )
         """)
         conn.commit()
+        
+        # Ensure 'source' column exists in 'due' table
+        add_due_source_column_if_not_exists()
+        
+        # Update other table schemas with new columns
+        update_db_schema()
 
 # ---------------------------
 # CRUD generator
@@ -302,7 +363,7 @@ def safe_get_all_products():
     return safe_rows(get_all_products(), defaults)
 
 def safe_get_all_sales():
-    defaults = {"id":None,"product_id":None,"quantity":0,"sale_price":0,"total":0,"date":"","discount":0,"tax":0,"total_after_discount_tax":0,"due_amount":0,"due_received_by":"","barcode":"","sold_by":"","invoice_no":""}
+    defaults = {"id":None,"product_id":None,"quantity":0,"sale_price":0,"total":0,"date":"","discount":0,"tax":0,"total_after_discount_tax":0,"due_amount":0,"due_received_by":"","barcode":"","sold_by":"","invoice_no":"","customer_name":""}
     return safe_rows(get_all_sales(), defaults)
 
 def safe_get_all_due_payment():
@@ -310,7 +371,7 @@ def safe_get_all_due_payment():
     return safe_rows(get_all_due_payment(), defaults)
 
 def safe_get_all_due():
-    defaults = {"id":None,"customer":"","amount":0,"date":""}
+    defaults = {"id":None,"customer":"","amount":0,"source":"", "date":""}
     return safe_rows(get_all_due(), defaults)
 
 def safe_get_all_service_requests():
@@ -321,42 +382,155 @@ def safe_get_all_service_requests():
 # Sale + stock auto-sync
 # ---------------------------
 @db_retry
-def record_sale_and_update_stock(product_id, quantity, sale_price, discount=0, tax=0, sold_by="", barcode="", invoice_no=None):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    product = next((p for p in safe_get_all_products() if p["id"] == product_id), None)
-    if not product:
-        raise ValueError("Product not found")
-    total = sale_price * quantity
-    total_after_discount_tax = total - discount + tax
-    sale_id = add_sale(product_id=product_id, quantity=quantity, sale_price=sale_price, total=total, date=now,
-                       discount=discount, tax=tax, total_after_discount_tax=total_after_discount_tax, due_amount=0,
-                       due_received_by=None, barcode=barcode, sold_by=sold_by, invoice_no=invoice_no)
-    new_stock = (product["stock"] or 0) - quantity
-    update_product(product_id, stock=new_stock)
-    add_stock(product_id=product_id, quantity=-quantity, added_date=now, entry_type='sale', location='main', note=f"Sold by {sold_by}")
-    return sale_id
+def record_sale_and_update_stock(product_list, total_price, discount, due_amount, due_received_by, seller_name, customer_name, payment_method, txn_id=None, mobile_no=None):
+    """
+    Records a complete sale and updates product stock in a single transaction.
+    
+    Args:
+        product_list (dict): Dictionary of products sold, e.g., {product_id: {'quantity': 1, ...}}
+        total_price (float): The total price of the entire sale.
+        discount (float): Total discount for the sale.
+        due_amount (float): The remaining due amount.
+        due_received_by (str): The name of the person who owes the due amount.
+        seller_name (str): The name of the seller.
+        customer_name (str): The name of the customer.
+        payment_method (str): The payment method used.
+        txn_id (str, optional): Transaction ID for wallet payments.
+        mobile_no (str, optional): Mobile number for wallet payments.
+    """
+    conn = get_connection()
+    if not conn:
+        raise Exception("Database connection failed.")
+
+    try:
+        with conn:
+            cursor = conn.cursor()
+            
+            # Use a single invoice number for the entire transaction
+            invoice_no = datetime.now().strftime("INV-%Y%m%d%H%M%S")
+            
+            for product_id, item in product_list.items():
+                quantity = item["quantity"]
+                unit_price = item["unit_price"]
+                item_discount = item.get("discount", 0)
+                item_total = max(0, quantity * unit_price - item_discount)
+                
+                # Check current stock before sale
+                cursor.execute("SELECT stock FROM products WHERE id = ?", (product_id,))
+                current_stock = cursor.fetchone()[0]
+                if current_stock < quantity:
+                    raise ValueError(f"Not enough stock for product ID {product_id}. Available: {current_stock}, Requested: {quantity}")
+
+                # Insert sale record for each product item
+                cursor.execute("""
+                    INSERT INTO sales (
+                        product_id, quantity, sale_price, total, discount, due_amount,
+                        due_received_by, sold_by, customer_name, invoice_no, payment_method, txn_id, mobile_no
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    product_id,
+                    quantity,
+                    unit_price,
+                    item_total,
+                    item_discount,
+                    due_amount if len(product_list) == 1 else 0, # Only set due_amount on a single-item sale for simplicity
+                    due_received_by if due_amount > 0 and len(product_list) == 1 else None,
+                    seller_name,
+                    customer_name,
+                    invoice_no,
+                    payment_method,
+                    txn_id,
+                    mobile_no
+                ))
+                
+                # Update product stock
+                cursor.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (quantity, product_id))
+            
+            # Insert due payment record if there is a due amount
+            if due_amount > 0:
+                cursor.execute("""
+                    INSERT INTO due_payment (customer, amount, date, due_date, balance_due, payment_method, invoice_no)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    customer_name,
+                    due_amount,
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    datetime.now().strftime("%Y-%m-%d"), # Assuming due date is same as sale date
+                    total_price - due_amount,
+                    payment_method,
+                    invoice_no
+                ))
+            
+            # Record recharge or other payment info if necessary
+            if payment_method in ["নগদ", "রকেট", "বিকাশ"] and txn_id and mobile_no:
+                # Add a record to a "payments" or "recharge" table
+                # For now, we'll assume a record can be added to the recharge table
+                cursor.execute("""
+                    INSERT INTO recharge (customer_name, mobile, operator, amount)
+                    VALUES (?, ?, ?, ?)
+                """, (customer_name, mobile_no, payment_method, total_price - due_amount))
+
+            conn.commit()
+            return True
+
+    except Exception as e:
+        conn.rollback()
+        raise e
 
 sale_and_stock_update = record_sale_and_update_stock
 
 # ---------------------------
-# Due sync from sales and service requests
+# Consolidated Due Sync
 # ---------------------------
-def sync_due_from_sales_and_service():
-    # Sales
-    for s in safe_get_all_sales():
-        if s["due_amount"] > 0:
-            existing = [d for d in safe_get_all_due_payment() if d["sale_id"] == s["id"]]
-            if not existing:
-                product_name = next((p["name"] for p in safe_get_all_products() if p["id"] == s["product_id"]), "")
-                add_due_payment(customer="", amount=s["due_amount"], due_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                sale_id=s["id"], product_name=product_name, quantity=s["quantity"])
-    # Service Requests
-    for sr in safe_get_all_service_requests():
-        if sr["payment_status"].lower() != "paid" and sr["due_amount"] > 0:
-            existing = [d for d in safe_get_all_due_payment() if d["sale_id"] == sr["id"]]
-            if not existing:
-                add_due_payment(customer=sr["customer_name"], amount=sr["due_amount"], due_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                sale_id=sr["id"], product_name="Service Request", quantity=1)
+@db_retry
+def sync_all_dues_to_main_table():
+    """
+    Consolidates due amounts from sales and service requests into the `due` table.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # 1. Clear the main `due` table to prepare for fresh data
+        cursor.execute("DELETE FROM due")
+
+        # 2. Get consolidated due amounts from `sales` table
+        cursor.execute("""
+            SELECT customer_name, SUM(due_amount) as total_due
+            FROM sales
+            WHERE due_amount > 0
+            GROUP BY customer_name
+        """)
+        sales_dues = cursor.fetchall()
+
+        # 3. Get consolidated due amounts from `service_requests` table
+        cursor.execute("""
+            SELECT customer_name, SUM(due_amount) as total_due
+            FROM service_requests
+            WHERE due_amount > 0
+            GROUP BY customer_name
+        """)
+        service_dues = cursor.fetchall()
+
+        # 4. Merge the results and insert into `due` table with source info
+        for row in sales_dues:
+            customer = row["customer_name"]
+            amount = row["total_due"]
+            if amount > 0:
+                cursor.execute("""
+                    INSERT INTO due (customer, amount, source, date)
+                    VALUES (?, ?, ?, ?)
+                """, (customer, amount, 'বিক্রয়', datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        
+        for row in service_dues:
+            customer = row["customer_name"]
+            amount = row["total_due"]
+            if amount > 0:
+                cursor.execute("""
+                    INSERT INTO due (customer, amount, source, date)
+                    VALUES (?, ?, ?, ?)
+                """, (customer, amount, 'সেবা অনুরোধ', datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+        conn.commit()
 
 # ---------------------------
 # Background due sync thread
@@ -365,7 +539,7 @@ def start_background_due_sync(interval_seconds=2):
     def run_sync():
         while True:
             try:
-                sync_due_from_sales_and_service()
+                sync_all_dues_to_main_table()
             except Exception as e:
                 print(f"Background due sync error: {e}")
             time.sleep(interval_seconds)

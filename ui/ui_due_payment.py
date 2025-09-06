@@ -102,14 +102,20 @@ class DuePaymentUI:
         self.excel_btn.grid(row=0, column=5, padx=2)
 
         # ---------- Data Table ----------
-        columns = ("ID", "ক্রেতা", "বাকি অর্থ", "বাকি তারিখ", "বিক্রয় আইডি", "রেকর্ডের সময়")
+        columns = ("ID", "ক্রেতা", "বাকি অর্থ", "উৎস", "বাকি তারিখ", "বিক্রয় আইডি", "রেকর্ডের সময়")
         self.tree = ttk.Treeview(self.frame, columns=columns, show="headings", bootstyle="success")
+        
         for col in columns:
             self.tree.heading(col, text=col)
             width = 120
-            if col in ("ক্রেতা", "রেকর্ডের সময়"):
+            if col in ("ক্রেতা", "রেকর্ডের সময়"):
                 width = 160
+            elif col == "বাকি অর্থ":
+                width = 100
+            elif col == "উৎস":
+                width = 100
             self.tree.column(col, anchor="center", width=width)
+            
         self.tree.grid(row=3, column=0, columnspan=7, sticky="nsew", pady=(10, 0), padx=(3, 3))
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
@@ -125,6 +131,10 @@ class DuePaymentUI:
 
         self.tree.tag_configure("evenrow", background="#f5f9ff")
         self.tree.tag_configure("oddrow", background="#ffffff")
+
+        # ---------- Entry Count Label ----------
+        self.entry_count_label = ttk.Label(self.frame, text="", anchor="e", font=("Kalpurush", 10, "bold"))
+        self.entry_count_label.grid(row=4, column=7, sticky="e", padx=(3,3), pady=(5,0))
 
         # ---------- Customer Summary Box ----------
         summary_box = ttk.Labelframe(self.frame, text="কাস্টমারের সারসংক্ষেপ", padding=(14, 6))
@@ -158,10 +168,13 @@ class DuePaymentUI:
             tags = ("evenrow",) if idx % 2 == 0 else ("oddrow",)
             self.tree.insert(
                 "", tk.END,
-                values=(due["id"], due["customer"], due["amount"], due["due_date"], due["sale_id"], due["date"]),
+                values=(due["id"], due["customer"], due["amount"], due.get("source", "N/A"), due["due_date"], due["sale_id"], due["date"]),
                 tags=tags
             )
         self.selected_id = None
+
+        # Update entry count
+        self.entry_count_label.config(text=f"মোট এন্ট্রি: {len(filtered_data)}")
 
     def on_tree_select(self, event):
         selected = self.tree.selection()
@@ -173,7 +186,7 @@ class DuePaymentUI:
             self.amount_entry.delete(0, tk.END)
             self.amount_entry.insert(0, values[2])
             self.due_date_entry.delete(0, tk.END)
-            self.due_date_entry.insert(0, values[3])
+            self.due_date_entry.insert(0, values[4]) # Adjusted index for due_date
         else:
             self.selected_id = None
 
@@ -190,7 +203,7 @@ class DuePaymentUI:
             return
         try:
             add_due_payment(customer, float(amount), due_date)
-            messagebox.showinfo("সফল", "বাকি যোগ হয়েছে।")
+            messagebox.showinfo("সফল", "বাকি যোগ হয়েছে।")
             self.refresh_tree()
         except Exception as e:
             messagebox.showerror("ত্রুটি", str(e))
@@ -210,7 +223,7 @@ class DuePaymentUI:
             return
         try:
             update_due_payment(self.selected_id, customer, float(amount), due_date)
-            messagebox.showinfo("সফল", "বাকি আপডেট হয়েছে।")
+            messagebox.showinfo("সফল", "বাকি আপডেট হয়েছে।")
             self.refresh_tree()
         except Exception as e:
             messagebox.showerror("ত্রুটি", str(e))
@@ -224,7 +237,7 @@ class DuePaymentUI:
             return
         try:
             delete_due_payment(self.selected_id)
-            messagebox.showinfo("সফল", "বাকি ডিলিট হয়েছে।")
+            messagebox.showinfo("সফল", "বাকি ডিলিট হয়েছে।")
             self.refresh_tree()
         except Exception as e:
             messagebox.showerror("ত্রুটি", str(e))
@@ -246,13 +259,13 @@ class DuePaymentUI:
         pdf.add_page()
         pdf.set_font("Arial", size=12)
         pdf.cell(0, 10, txt="বাকি ব্যবস্থাপনা রিপোর্ট", ln=1, align="C")
-        columns = ["আইডি", "ক্রেতা", "বাকি অর্থ", "তারিখ", "বিক্রয় আইডি", "রেকর্ড"]
-        col_widths = [18, 38, 28, 26, 26, 36]
+        columns = ["আইডি", "ক্রেতা", "বাকি অর্থ", "উৎস", "তারিখ", "বিক্রয় আইডি", "রেকর্ড"]
+        col_widths = [18, 38, 28, 26, 26, 26, 36]
         for idx, col in enumerate(columns):
             pdf.cell(col_widths[idx], 10, col, 1, 0, "C")
         pdf.ln()
         for row in data:
-            lst = [str(row["id"]), str(row["customer"]), str(row["amount"]), str(row["due_date"]),
+            lst = [str(row["id"]), str(row["customer"]), str(row["amount"]), str(row.get("source", "N/A")), str(row["due_date"]),
                    str(row["sale_id"]), str(row["date"])]
             for idx, item in enumerate(lst):
                 pdf.cell(col_widths[idx], 8, item, 1, 0, "L")

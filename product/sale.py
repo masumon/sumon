@@ -1,4 +1,4 @@
-# sales/sales_operations.py
+# product/sale.py
 # বিক্রয় সম্পর্কিত সমস্ত লজিক ফাংশন এই মডিউলে থাকে।
 
 import sqlite3

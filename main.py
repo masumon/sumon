@@ -15,6 +15,7 @@ from auth.user import create_user, get_all_users
 
 # ----------------- Window Helper -----------------
 def center_window(win, width, height):
+    """Window কে center-এ অবস্থান করানো"""
     win.update_idletasks()
     screen_width = win.winfo_screenwidth()
     screen_height = win.winfo_screenheight()
@@ -35,18 +36,19 @@ if __name__ == "__main__":
 
     # ----------------- UI Helpers -----------------
     def clear_window():
+        """Root window এর সব widgets মুছে দেয়"""
         for widget in root.winfo_children():
             widget.destroy()
 
     def launch_dashboard(user):
-        """Called after successful login"""
+        """Login সফল হলে ড্যাশবোর্ড চালু করা হয়"""
         clear_window()
         app = MainApp(master=root, logout_callback=launch_login)
         app.pack(fill=tb.constants.BOTH, expand=True)
         app.login_success(user)
 
     def launch_login():
-        """Show login screen"""
+        """Login screen দেখানো হয়"""
         clear_window()
         LoginUI(root, launch_dashboard).frame.pack(fill=tb.constants.BOTH, expand=True)
 
