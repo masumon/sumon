@@ -3,6 +3,7 @@
 import sqlite3
 import os
 from datetime import datetime
+from db import get_connection
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "database", "smartshop.db")
 
@@ -13,7 +14,9 @@ def get_sales_report():
     """
     try:
         from product.product import get_product_name
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
+        if not conn:
+            return []
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
@@ -22,7 +25,6 @@ def get_sales_report():
             ORDER BY id DESC
         """)
         rows = cursor.fetchall()
-        conn.close()
         sales = []
         for r in rows:
             sales.append({
@@ -42,6 +44,9 @@ def get_sales_report():
     except Exception as e:
         print("Error in get_sales_report:", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 # ---------------- Sales Report by Date ----------------
 def get_sales_report_by_date(start_date, end_date):
@@ -49,7 +54,9 @@ def get_sales_report_by_date(start_date, end_date):
     start_date, end_date: 'YYYY-MM-DD' ফরম্যাট
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
+        if not conn:
+            return []
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
@@ -59,7 +66,6 @@ def get_sales_report_by_date(start_date, end_date):
             ORDER BY date DESC
         """, (start_date, end_date))
         rows = cursor.fetchall()
-        conn.close()
         sales = []
         for r in rows:
             sales.append({
@@ -79,6 +85,9 @@ def get_sales_report_by_date(start_date, end_date):
     except Exception as e:
         print("Error in get_sales_report_by_date:", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 # ---------------- Monthly Profit Report ----------------
 def get_monthly_profit_report(month, year):
@@ -88,7 +97,9 @@ def get_monthly_profit_report(month, year):
     year: int
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
+        if not conn:
+            return {"total_sales": 0, "profit": 0}
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
@@ -98,7 +109,6 @@ def get_monthly_profit_report(month, year):
             WHERE strftime('%Y', date)=? AND strftime('%m', date)=?
         """, (str(year), f"{month:02d}"))
         row = cursor.fetchone()
-        conn.close()
         return {
             "total_sales": row["total_sales"] or 0,
             "profit": row["profit"] or 0
@@ -106,14 +116,20 @@ def get_monthly_profit_report(month, year):
     except Exception as e:
         print("Error in get_monthly_profit_report:", e)
         return {"total_sales": 0, "profit": 0}
+    finally:
+        if conn:
+            conn.close()
 
 # ---------------- Due Report ----------------
 def get_due_report():
     """
     Due রিপোর্ট। central due_payment table থেকে।
+    Duplicate safe.
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
+        if not conn:
+            return []
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
@@ -122,12 +138,16 @@ def get_due_report():
             ORDER BY id DESC
         """)
         rows = cursor.fetchall()
-        conn.close()
+        seen = set()
         dues = []
         for r in rows:
+            key = (r["customer"] or "Unknown", r["sale_id"], r["due_date"])
+            if key in seen:
+                continue
+            seen.add(key)
             dues.append({
                 "id": r["id"],
-                "customer": r["customer"],
+                "customer": r["customer"] or "Unknown",
                 "amount": r["amount"],
                 "due_date": r["due_date"],
                 "sale_id": r["sale_id"],
@@ -137,14 +157,20 @@ def get_due_report():
     except Exception as e:
         print("Error in get_due_report:", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 # ---------------- Due Report by Date ----------------
 def get_due_report_by_date(start_date, end_date):
     """
     start_date, end_date: 'YYYY-MM-DD' ফরম্যাট
+    Duplicate safe.
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
+        if not conn:
+            return []
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
@@ -154,12 +180,16 @@ def get_due_report_by_date(start_date, end_date):
             ORDER BY due_date DESC
         """, (start_date, end_date))
         rows = cursor.fetchall()
-        conn.close()
+        seen = set()
         dues = []
         for r in rows:
+            key = (r["customer"] or "Unknown", r["sale_id"], r["due_date"])
+            if key in seen:
+                continue
+            seen.add(key)
             dues.append({
                 "id": r["id"],
-                "customer": r["customer"],
+                "customer": r["customer"] or "Unknown",
                 "amount": r["amount"],
                 "due_date": r["due_date"],
                 "sale_id": r["sale_id"],
@@ -169,6 +199,9 @@ def get_due_report_by_date(start_date, end_date):
     except Exception as e:
         print("Error in get_due_report_by_date:", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 # ---------------- Customer Due Summary ----------------
 def get_customer_due_summary(customer_name):
@@ -176,22 +209,20 @@ def get_customer_due_summary(customer_name):
     নির্দিষ্ট কাস্টমারের Sales + Service dues summary।
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
+        if not conn:
+            return {"total_due":0, "total_sales_due":0, "total_service_due":0}
         cursor = conn.cursor()
 
-        # Total dues
         cursor.execute("SELECT SUM(amount) FROM due_payment WHERE customer=?", (customer_name,))
         total_due = cursor.fetchone()[0] or 0
 
-        # Sales dues
         cursor.execute("SELECT SUM(amount) FROM due_payment WHERE customer=? AND sale_id IS NOT NULL", (customer_name,))
         total_sales_due = cursor.fetchone()[0] or 0
 
-        # Service dues
         cursor.execute("SELECT SUM(amount) FROM due_payment WHERE customer=? AND sale_id IS NULL", (customer_name,))
         total_service_due = cursor.fetchone()[0] or 0
 
-        conn.close()
         return {
             "total_due": total_due,
             "total_sales_due": total_sales_due,
@@ -204,3 +235,6 @@ def get_customer_due_summary(customer_name):
             "total_sales_due": 0,
             "total_service_due": 0
         }
+    finally:
+        if conn:
+            conn.close()

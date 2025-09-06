@@ -8,23 +8,22 @@ import pandas as pd
 from fpdf import FPDF
 import sys
 import os
+from datetime import datetime
 
 # project root যোগ করা যাতে Python module ঠিকমত খুঁজে পায়
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# বিদ্যমান ডাটা-লেয়ার অপরিবর্তিত
+# বিদ্যমান ডাটা-লেয়ার থেকে সরাসরি import
 from due_payment_module.due_payment import (
     get_all_due_payments,
     add_due_payment,
     update_due_payment,
     delete_due_payment,
     sync_due_from_sales_and_service,
+    get_customer_due_summary,  # core logic থেকে সরাসরি import
 )
-
-# শুধুমাত্র Customer summary এর জন্য
-from due_payment_module.due_payment_report import get_customer_due_summary
 
 
 class DuePaymentUI:
@@ -32,6 +31,12 @@ class DuePaymentUI:
         self.master = master
         if isinstance(self.master, tk.Tk):
             self.master.title("বাকি ব্যবস্থাপনা")
+
+        # Auto sync dues
+        try:
+            sync_due_from_sales_and_service()
+        except Exception as e:
+            print("Auto-sync error:", e)
 
         # ---------- Styles ----------
         self.style = ttk.Style()
@@ -142,18 +147,15 @@ class DuePaymentUI:
         # Load initial data
         self.refresh_tree()
 
-    # ---------------------------
-    # Tree Methods
-    # ---------------------------
+    # --------------------------- Tree Methods ---------------------------
     def refresh_tree(self):
         for row in self.tree.get_children():
             self.tree.delete(row)
         data = get_all_due_payments()
-        # === filter duplicates & unnamed customers ===
         seen_ids = set()
         filtered_data = []
         for d in data:
-            if d["id"] not in seen_ids and d.get("customer"):
+            if d.get("id") not in seen_ids and d.get("customer"):
                 filtered_data.append(d)
                 seen_ids.add(d["id"])
         for idx, due in enumerate(filtered_data):
@@ -179,15 +181,16 @@ class DuePaymentUI:
         else:
             self.selected_id = None
 
-    # ---------------------------
-    # CRUD Methods
-    # ---------------------------
+    # --------------------------- CRUD Methods ---------------------------
     def add_due(self):
         customer = self.customer_entry.get().strip()
         amount = self.amount_entry.get().strip()
         due_date = self.due_date_entry.get().strip()
         if not customer or not amount or not due_date:
             messagebox.showwarning("ত্রুটি", "সকল তথ্য পূরণ করুন")
+            return
+        if not self.validate_date(due_date):
+            messagebox.showwarning("ত্রুটি", "তারিখ ফরম্যাট সঠিক নয় (YYYY-MM-DD)")
             return
         try:
             add_due_payment(customer, float(amount), due_date, sale_id=None)
@@ -197,7 +200,7 @@ class DuePaymentUI:
             messagebox.showerror("ত্রুটি", str(e))
 
     def update_due(self):
-        if not hasattr(self, "selected_id") or not self.selected_id:
+        if getattr(self, "selected_id", None) is None:
             messagebox.showwarning("ত্রুটি", "সিলেক্ট করুন কোন বাকি আপডেট করবেন।")
             return
         customer = self.customer_entry.get().strip()
@@ -205,6 +208,9 @@ class DuePaymentUI:
         due_date = self.due_date_entry.get().strip()
         if not customer or not amount or not due_date:
             messagebox.showwarning("ত্রুটি", "সকল তথ্য পূরণ করুন")
+            return
+        if not self.validate_date(due_date):
+            messagebox.showwarning("ত্রুটি", "তারিখ ফরম্যাট সঠিক নয় (YYYY-MM-DD)")
             return
         try:
             update_due_payment(self.selected_id, customer, float(amount), due_date)
@@ -214,7 +220,7 @@ class DuePaymentUI:
             messagebox.showerror("ত্রুটি", str(e))
 
     def delete_due(self):
-        if not hasattr(self, "selected_id") or not self.selected_id:
+        if getattr(self, "selected_id", None) is None:
             messagebox.showwarning("ত্রুটি", "সিলেক্ট করুন কোন বাকি মুছবেন।")
             return
         sure = messagebox.askyesno("নিশ্চিত?", "আপনি কি বাকি সত্যিই মুছে ফেলতে চান?")
@@ -227,16 +233,16 @@ class DuePaymentUI:
         except Exception as e:
             messagebox.showerror("ত্রুটি", str(e))
 
-    # ---------------------------
-    # Export Methods
-    # ---------------------------
+    # --------------------------- Export Methods ---------------------------
     def export_pdf(self):
         start_date = self.export_start.get().strip()
         end_date = self.export_end.get().strip()
-        data = [d for d in get_all_due_payments()
-                if (not start_date or d["due_date"] >= start_date)
-                and (not end_date or d["due_date"] <= end_date)
-                and d.get("customer")]  # filter unnamed
+        data = [
+            d for d in get_all_due_payments()
+            if (not start_date or d["due_date"] >= start_date)
+            and (not end_date or d["due_date"] <= end_date)
+            and d.get("customer")
+        ]
         if not data:
             messagebox.showwarning("ত্রুটি", "এই তারিখে কোনো ডেটা নেই।")
             return
@@ -256,41 +262,55 @@ class DuePaymentUI:
                 pdf.cell(col_widths[idx], 8, item, 1, 0, "L")
             pdf.ln()
         try:
-            pdf.output("due_payments_report.pdf")
-            messagebox.showinfo("সফল", "PDF Report: due_payments_report.pdf")
+            filename = f"due_payments_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            pdf.output(filename)
+            messagebox.showinfo("সফল", f"PDF Report: {filename}")
         except Exception as e:
             messagebox.showerror("ত্রুটি", str(e))
 
     def export_excel(self):
         start_date = self.export_start.get().strip()
         end_date = self.export_end.get().strip()
-        data = [d for d in get_all_due_payments()
-                if (not start_date or d["due_date"] >= start_date)
-                and (not end_date or d["due_date"] <= end_date)
-                and d.get("customer")]  # filter unnamed
+        data = [
+            d for d in get_all_due_payments()
+            if (not start_date or d["due_date"] >= start_date)
+            and (not end_date or d["due_date"] <= end_date)
+            and d.get("customer")
+        ]
         if not data:
             messagebox.showwarning("ত্রুটি", "এই তারিখে কোনো ডেটা নেই।")
             return
         df = pd.DataFrame(data)
         try:
-            df.to_excel("due_payments_report.xlsx", index=False)
-            messagebox.showinfo("সফল", "Excel Report: due_payments_report.xlsx")
+            filename = f"due_payments_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            df.to_excel(filename, index=False)
+            messagebox.showinfo("সফল", f"Excel Report: {filename}")
         except Exception as e:
             messagebox.showerror("ত্রুটি", str(e))
 
-    # ---------------------------
-    # Customer Summary Method
-    # ---------------------------
+    # --------------------------- Customer Summary Method ---------------------------
     def show_customer_summary(self):
         customer_name = self.summary_customer_entry.get().strip()
         if not customer_name:
             messagebox.showwarning("ত্রুটি", "ক্রেতার নাম লিখুন")
             return
-        summary = get_customer_due_summary(customer_name)
-        text = (
-            f"ক্রেতা: {customer_name} | "
-            f"মোট বাকি: {summary['total_due']} | "
-            f"Sales বাকি: {summary['total_sales_due']} | "
-            f"Service বাকি: {summary['total_service_due']}"
-        )
-        self.summary_label.config(text=text)
+        try:
+            summary = get_customer_due_summary(customer_name)
+            text = (
+                f"ক্রেতা: {customer_name} | "
+                f"মোট বাকি: {summary.get('total_due', 0)} | "
+                f"Sales বাকি: {summary.get('total_sales_due', 0)} | "
+                f"Service বাকি: {summary.get('total_service_due', 0)}"
+            )
+            self.summary_label.config(text=text)
+        except Exception as e:
+            messagebox.showerror("ত্রুটি", str(e))
+
+    # --------------------------- Helper Methods ---------------------------
+    @staticmethod
+    def validate_date(date_text):
+        try:
+            datetime.strptime(date_text, "%Y-%m-%d")
+            return True
+        except ValueError:
+            return False

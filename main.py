@@ -52,5 +52,4 @@ if __name__ == "__main__":
 
     # ----------------- Start with Login -----------------
     launch_login()
-
     root.mainloop()
