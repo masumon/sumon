@@ -1,0 +1,46 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Database files (SQLite, etc.)
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE/editor folders
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Backup files
+*.bak
+*.swp
+*.tmp
+
+# Large or unnecessary files
+*.zip
+*.tar
+*.rar
+*.exe
+*.dll
+*.so
+*.bin
+
+# Optional: node_modules (if using JS packages)
+node_modules/
+
+# Python environment files
+*.env
